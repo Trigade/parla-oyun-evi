@@ -427,17 +427,43 @@ export default function KasaEkrani() {
               <button className={sureSecimi === null ? "" : "ghost"} onClick={() => setSureSecimi(null)}>
                 Kaldığı Süre Kadar
               </button>
-              {[10, 20, 30, 60].map((dk) => (
-                <button
-                  key={dk}
-                  className={sureSecimi === dk ? "" : "ghost"}
-                  onClick={() => setSureSecimi(dk)}
-                >
-                  {dk} dk
-                </button>
-              ))}
+              {/* Saat ve dakika ayrı seçilir; ikisi de 0 ise süre seçilmemiş sayılır
+                  ("Kaldığı Süre Kadar"). Sunucu 0'dan büyük her dakikayı kabul eder. */}
+              <select
+                id="kalis-suresi-saat"
+                aria-label="Kalış süresi (saat)"
+                value={Math.floor((sureSecimi ?? 0) / 60)}
+                onChange={(e) => {
+                  const toplam = Number(e.target.value) * 60 + ((sureSecimi ?? 0) % 60);
+                  setSureSecimi(toplam > 0 ? toplam : null);
+                }}
+                style={{ width: "auto" }}
+              >
+                {Array.from({ length: 13 }, (_, saat) => (
+                  <option key={saat} value={saat}>
+                    {saat} saat
+                  </option>
+                ))}
+              </select>
+              <select
+                id="kalis-suresi-dakika"
+                aria-label="Kalış süresi (dakika)"
+                value={(sureSecimi ?? 0) % 60}
+                onChange={(e) => {
+                  const toplam = Math.floor((sureSecimi ?? 0) / 60) * 60 + Number(e.target.value);
+                  setSureSecimi(toplam > 0 ? toplam : null);
+                }}
+                style={{ width: "auto" }}
+              >
+                {Array.from({ length: 12 }, (_, i) => i * 5).map((dk) => (
+                  <option key={dk} value={dk}>
+                    {dk} dk
+                  </option>
+                ))}
+              </select>
               {sureSecimi != null && (
                 <span style={{ fontWeight: 600 }}>
+                  {formatSureMetni(sureSecimi)} ·{" "}
                   {seciliSureTutari != null ? `Tutar: ${formatKurus(seciliSureTutari)}` : "Tutar: —"}
                 </span>
               )}
