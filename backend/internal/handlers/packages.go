@@ -107,10 +107,22 @@ type createPackageDefinitionRequest struct {
 	Dakika int64  `json:"dakika"`
 }
 
+// paketSatisiBakimda true iken yeni paket satışı ve paket türü tanımlama
+// reddedilir (Satın Alma ekranı şimdilik bakımda). Mevcut paket bakiyeleri
+// oturum kapatmada kullanılmaya devam eder. Yeniden açmak için false yapın;
+// frontend'deki PAKET_SATISI_BAKIMDA (pages/SatinAlma.tsx) da güncellenmeli.
+const paketSatisiBakimda = true
+
+const paketSatisiBakimdaMesaji = "Paket satışı şu an bakımda, bu işlem geçici olarak kapalı."
+
 // CreatePackageDefinition yeni bir paket türü tanımlar (ör. "1000 Dakika").
 // Sadece yönetici erişebilir; fiyat, satın alma anında güncel dakika
 // ücretinden hesaplandığından burada tutulmaz.
 func (a *API) CreatePackageDefinition(w http.ResponseWriter, r *http.Request) {
+	if paketSatisiBakimda {
+		writeError(w, http.StatusServiceUnavailable, paketSatisiBakimdaMesaji)
+		return
+	}
 	var req createPackageDefinitionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
@@ -200,6 +212,10 @@ type purchasePackageRequest struct {
 // satın almanın tutarı etkilenmez — pricing_rules ile aynı mantık).
 // Paket, satın alındığı andan itibaren 1 ay geçerlidir.
 func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
+	if paketSatisiBakimda {
+		writeError(w, http.StatusServiceUnavailable, paketSatisiBakimdaMesaji)
+		return
+	}
 	claims, ok := auth.FromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "Yetkilendirme bilgisi bulunamadı, lütfen tekrar giriş yapın.")

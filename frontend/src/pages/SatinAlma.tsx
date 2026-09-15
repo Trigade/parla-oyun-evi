@@ -12,7 +12,29 @@ function formatKurus(kurus: number) {
   return (kurus / 100).toLocaleString("tr-TR", { style: "currency", currency: "TRY" });
 }
 
+// Paket satışı şimdilik kapalı. Yeniden açmak için false yapın; backend'deki
+// paketSatisiBakimda sabiti de (handlers/packages.go) aynı şekilde güncellenmeli.
+const PAKET_SATISI_BAKIMDA = true;
+
 export default function SatinAlma() {
+  if (PAKET_SATISI_BAKIMDA) {
+    return (
+      <div className="page">
+        <h1>Satın Alma</h1>
+        <div className="card">
+          <h2>Bu bölüm bakımda</h2>
+          <p className="muted">
+            Paket satışı ve yeni paket türü tanımlama şimdilik kapalı. Müşterilerin daha önce aldığı
+            paketlerin bakiyesi kasa ekranında kullanılmaya devam eder.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <SatinAlmaIcerik />;
+}
+
+function SatinAlmaIcerik() {
   const isAdmin = getIsAdmin();
 
   const [query, setQuery] = useState("");
