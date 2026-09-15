@@ -356,6 +356,21 @@ func (a *API) CreatePricingTierVersion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Blok süreleri sabittir (30 dk, 60 dk, 90 dk, 2 saat, 3 saat, 5 saat,
+	// 10 saat); Fiyat Politikası ekranında yalnızca ücretler güncellenir.
+	// Aynı liste frontend'de (pages/FiyatPolitikasi.tsx) ve varsayılan
+	// fiyatları yazan 0015 migration'ında da tanımlıdır.
+	sabitBlokBitisleri := []int64{30, 60, 90, 120, 180, 300, 600}
+	if len(req.Tiers) != len(sabitBlokBitisleri) {
+		writeError(w, http.StatusBadRequest, "Fiyat blokları sabittir, yalnızca ücretler güncellenebilir.")
+		return
+	}
+	for i, t := range req.Tiers {
+		if t.MaxDakika != sabitBlokBitisleri[i] {
+			writeError(w, http.StatusBadRequest, "Fiyat blokları sabittir, yalnızca ücretler güncellenebilir.")
+			return
+		}
+	}
 
 	ctx := r.Context()
 	tx, err := a.DB.Begin(ctx)
