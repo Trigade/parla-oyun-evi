@@ -157,6 +157,9 @@ export interface OpenSession {
   gecen_dakika: number;
   sure_secimi_dakika?: number;
   on_odeme_yapildi_mi: boolean;
+  // Yalnızca erken ödemesi alınmış (on_odeme_yapildi_mi) oturumlarda dolu gelir.
+  tahsil_tutar_kurus?: number;
+  odeme_tipi?: "nakit" | "kredi_karti" | "paket";
 }
 
 export interface LoginResponse {

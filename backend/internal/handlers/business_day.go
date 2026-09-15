@@ -78,10 +78,12 @@ func (a *API) StartBusinessDay(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// EndBusinessDay ("Gün Sonu") açık iş gününü kapatır. Açık (durum='acik')
-// oturum varsa işlem reddedilir — önce tüm oturumların nakit/kart/elle
-// kapatılmış olması gerekir. Başarılı olursa, gün boyunca kapanan tüm
-// oturumları içeren bir .docx raporu döner.
+// EndBusinessDay ("Gün Sonu") açık iş gününü kapatır. Ödemesi alınmamış açık
+// oturum varsa işlem reddedilir — önce bunların nakit/kart/elle kapatılmış
+// olması gerekir. Ödemesi erkenden alınmış ama "Çıkış Yaptı" ile henüz
+// kapatılmamış oturumlar gün sonunu engellemez: gün kapanırken otomatik
+// olarak çıkış yapmış sayılır. Başarılı olursa, gün boyunca ödemesi alınan
+// tüm oturumları içeren bir PDF raporu döner.
 func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.FromContext(r.Context())
 	if !ok {
@@ -117,16 +119,16 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var acikOturumSayisi int64
+	var odenmemisAcikOturumSayisi int64
 	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM sessions WHERE durum = 'acik'`,
-	).Scan(&acikOturumSayisi); err != nil {
+		`SELECT COUNT(*) FROM sessions WHERE durum = 'acik' AND NOT on_odeme_yapildi_mi`,
+	).Scan(&odenmemisAcikOturumSayisi); err != nil {
 		writeError(w, http.StatusInternalServerError, "açık oturum kontrolü yapılamadı")
 		return
 	}
-	if acikOturumSayisi > 0 {
+	if odenmemisAcikOturumSayisi > 0 {
 		writeError(w, http.StatusConflict,
-			fmt.Sprintf("gün sonu yapılamıyor: %d açık oturum var, önce hepsini kapatın", acikOturumSayisi))
+			fmt.Sprintf("gün sonu yapılamıyor: ödemesi alınmamış %d açık oturum var, önce hepsini kapatın", odenmemisAcikOturumSayisi))
 		return
 	}
 
@@ -140,13 +142,28 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ödemesi erkenden alınmış, hâlâ içeride görünen oturumlar gün sonunda
+	// kapatılır; tutarları erken ödemede zaten donmuştur, yeniden hesaplanmaz.
+	if _, err := tx.Exec(ctx, `
+		UPDATE sessions SET cikis_zamani = $1, durum = 'kapali'
+		WHERE durum = 'acik' AND on_odeme_yapildi_mi`,
+		kapanisZamani,
+	); err != nil {
+		writeServerError(w, http.StatusInternalServerError, "erken ödemeli oturumlar kapatılamadı", err)
+		return
+	}
+
+	// Rapor, oturumları ödemenin alındığı ana göre filtreler: erken ödemede
+	// bu an on_odeme_zamani'dir, diğerlerinde çıkış anı.
 	rows, err := tx.Query(ctx, `
 		SELECT c.ad, c.soyad, s.giris_zamani, s.cikis_zamani, s.toplam_dakika,
-			s.tahsil_tutar_kurus, s.indirim_kurus, s.odeme_tipi, s.manuel_kapatildi
+			s.tahsil_tutar_kurus, s.indirim_kurus, s.odeme_tipi, s.manuel_kapatildi, s.on_odeme_yapildi_mi
 		FROM sessions s
 		JOIN customers c ON c.id = s.customer_id
-		WHERE s.durum = 'kapali' AND s.cikis_zamani >= $1 AND s.cikis_zamani < $2
-		ORDER BY s.cikis_zamani ASC`,
+		WHERE s.durum = 'kapali'
+			AND COALESCE(s.on_odeme_zamani, s.cikis_zamani) >= $1
+			AND COALESCE(s.on_odeme_zamani, s.cikis_zamani) <= $2
+		ORDER BY COALESCE(s.on_odeme_zamani, s.cikis_zamani) ASC`,
 		acilisZamani, kapanisZamani,
 	)
 	if err != nil {
@@ -155,26 +172,32 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableRows := [][]string{}
-	var toplamKurus, nakitKurus, kartKurus, toplamIndirimKurus int64
-	var nakitSayisi, kartSayisi int64
+	var toplamKurus, nakitKurus, kartKurus, toplamIndirimKurus, erkenOdemeKurus int64
+	var nakitSayisi, kartSayisi, paketSayisi, erkenOdemeSayisi int64
 	for rows.Next() {
 		var ad, soyad string
 		var giris, cikis time.Time
 		var dakika, tutar, indirim int64
 		var odemeTipi string
-		var manuelKapatildi bool
-		if err := rows.Scan(&ad, &soyad, &giris, &cikis, &dakika, &tutar, &indirim, &odemeTipi, &manuelKapatildi); err != nil {
+		var manuelKapatildi, erkenOdeme bool
+		if err := rows.Scan(&ad, &soyad, &giris, &cikis, &dakika, &tutar, &indirim, &odemeTipi, &manuelKapatildi, &erkenOdeme); err != nil {
 			rows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
 		kapatmaSekli := "Normal"
-		if manuelKapatildi {
+		switch {
+		case manuelKapatildi:
 			kapatmaSekli = "Elle Kapatıldı"
+		case erkenOdeme:
+			kapatmaSekli = "Erken Ödeme"
 		}
 		odemeEtiket := "Nakit"
-		if odemeTipi == "kredi_karti" {
+		switch odemeTipi {
+		case "kredi_karti":
 			odemeEtiket = "Kredi Kartı"
+		case "paket":
+			odemeEtiket = "Paket"
 		}
 		indirimStr := "—"
 		if indirim > 0 {
@@ -192,12 +215,19 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		})
 		toplamKurus += tutar
 		toplamIndirimKurus += indirim
-		if odemeTipi == "nakit" {
+		switch odemeTipi {
+		case "nakit":
 			nakitKurus += tutar
 			nakitSayisi++
-		} else {
+		case "kredi_karti":
 			kartKurus += tutar
 			kartSayisi++
+		case "paket":
+			paketSayisi++
+		}
+		if erkenOdeme {
+			erkenOdemeKurus += tutar
+			erkenOdemeSayisi++
 		}
 	}
 	rows.Close()
@@ -207,23 +237,31 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ozet := []string{
+		fmt.Sprintf("Gün Başı: %s", acilisZamani.Format("02.01.2006 15:04")),
+		fmt.Sprintf("Gün Sonu: %s", kapanisZamani.Format("02.01.2006 15:04")),
+		fmt.Sprintf("Toplam Oturum: %d", len(tableRows)),
+		fmt.Sprintf("Toplam Ciro: %s", formatKurusStr(toplamKurus)),
+		fmt.Sprintf("Toplam İndirim: %s", formatKurusStr(toplamIndirimKurus)),
+		fmt.Sprintf("Nakit: %d oturum, %s", nakitSayisi, formatKurusStr(nakitKurus)),
+		fmt.Sprintf("Kredi Kartı: %d oturum, %s", kartSayisi, formatKurusStr(kartKurus)),
+	}
+	if paketSayisi > 0 {
+		ozet = append(ozet, fmt.Sprintf("Paket Bakiyesinden: %d oturum", paketSayisi))
+	}
+	if erkenOdemeSayisi > 0 {
+		ozet = append(ozet, fmt.Sprintf("Erken Ödeme: %d oturum, %s (toplam ciroya dahil)", erkenOdemeSayisi, formatKurusStr(erkenOdemeKurus)))
+	}
+
 	rapor := pdf.Report{
-		LogoJPEG:    assets.LogoJPEG,
-		BaslikUst:   "Parla Oyun Evi",
-		BaslikAlt:   "Gün Sonu Raporu",
-		TarihEtiket: kapanisZamani.Format("02.01.2006"),
-		SummaryLines: []string{
-			fmt.Sprintf("Gün Başı: %s", acilisZamani.Format("02.01.2006 15:04")),
-			fmt.Sprintf("Gün Sonu: %s", kapanisZamani.Format("02.01.2006 15:04")),
-			fmt.Sprintf("Toplam Oturum: %d", len(tableRows)),
-			fmt.Sprintf("Toplam Ciro: %s", formatKurusStr(toplamKurus)),
-			fmt.Sprintf("Toplam İndirim: %s", formatKurusStr(toplamIndirimKurus)),
-			fmt.Sprintf("Nakit: %d oturum, %s", nakitSayisi, formatKurusStr(nakitKurus)),
-			fmt.Sprintf("Kredi Kartı: %d oturum, %s", kartSayisi, formatKurusStr(kartKurus)),
-		},
-		Headers:    []string{"Müşteri", "Giriş", "Çıkış", "Süre", "İndirim", "Tutar", "Ödeme Tipi", "Kapatma Şekli"},
-		Rows:       tableRows,
-		FooterText: "Sadece Yönetici Görebilir",
+		LogoJPEG:     assets.LogoJPEG,
+		BaslikUst:    "Parla Oyun Evi",
+		BaslikAlt:    "Gün Sonu Raporu",
+		TarihEtiket:  kapanisZamani.Format("02.01.2006"),
+		SummaryLines: ozet,
+		Headers:      []string{"Müşteri", "Giriş", "Çıkış", "Süre", "İndirim", "Tutar", "Ödeme Tipi", "Kapatma Şekli"},
+		Rows:         tableRows,
+		FooterText:   "Sadece Yönetici Görebilir",
 	}
 
 	docBytes, err := pdf.Build(rapor)

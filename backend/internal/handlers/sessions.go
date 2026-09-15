@@ -20,6 +20,10 @@ type openSessionView struct {
 	GecenDakika      int64     `json:"gecen_dakika"`
 	SureSecimiDakika *int64    `json:"sure_secimi_dakika,omitempty"`
 	OnOdemeYapildiMi bool      `json:"on_odeme_yapildi_mi"`
+	// Yalnızca erken ödemesi alınmış oturumlarda doludur (alınan tutar ve
+	// ödeme tipi); Gün Sonu ekranı bu oturumları ödenmemiş gibi göstermesin diye.
+	TahsilTutarKurus *int64  `json:"tahsil_tutar_kurus,omitempty"`
+	OdemeTipi        *string `json:"odeme_tipi,omitempty"`
 }
 
 // ListOpenSessions kasa ekranındaki "içeride olanlar" listesini besler.
@@ -27,10 +31,12 @@ type openSessionView struct {
 // tarafında bu değerden itibaren ilerletilir. Kasiyer girişte bir süre
 // seçtiyse (sure_secimi_dakika) bu da dönülür; ekran bu süre dolduğunda
 // otomatik uyarı gösterir. on_odeme_yapildi_mi true ise müşteri hâlâ
-// içeride ama ödemesi zaten erkenden alınmış demektir.
+// içeride ama ödemesi zaten erkenden alınmış demektir; bu durumda alınan
+// tutar ve ödeme tipi de dönülür.
 func (a *API) ListOpenSessions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT s.id, s.customer_id, c.ad, c.soyad, s.giris_zamani, s.sure_secimi_dakika, s.on_odeme_yapildi_mi
+		SELECT s.id, s.customer_id, c.ad, c.soyad, s.giris_zamani, s.sure_secimi_dakika, s.on_odeme_yapildi_mi,
+			s.tahsil_tutar_kurus, s.odeme_tipi
 		FROM sessions s
 		JOIN customers c ON c.id = s.customer_id
 		WHERE s.durum = 'acik'
@@ -102,14 +108,21 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 	var girisZamani time.Time
 	var durum string
 	var customerID int64
+	var onOdemeYapildiMi bool
 	if err := tx.QueryRow(ctx,
-		`SELECT giris_zamani, durum, customer_id FROM sessions WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&girisZamani, &durum, &customerID); err != nil {
+		`SELECT giris_zamani, durum, customer_id, on_odeme_yapildi_mi FROM sessions WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&girisZamani, &durum, &customerID, &onOdemeYapildiMi); err != nil {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
+		return
+	}
+	// Erken ödemesi alınmış bir oturum burada yeniden ücretlendirilirse alınan
+	// tutarın üzerine yazılır; bu oturumlar CheckOutSession ile kapatılmalıdır.
+	if onOdemeYapildiMi {
+		writeError(w, http.StatusConflict, "Bu oturumun ödemesi erkenden alındı. Müşteri çıktığında 'Çıkış Yaptı' ile kapatın.")
 		return
 	}
 

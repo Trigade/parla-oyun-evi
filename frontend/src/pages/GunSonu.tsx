@@ -25,6 +25,17 @@ function yuvarlaKurus(kurus: number): number {
   return Math.floor(lira / 10) * 10 * 100;
 }
 
+function odemeTipiEtiketi(odemeTipi: OpenSession["odeme_tipi"]) {
+  switch (odemeTipi) {
+    case "kredi_karti":
+      return "Kredi Kartı";
+    case "paket":
+      return "Paket";
+    default:
+      return "Nakit";
+  }
+}
+
 interface ElleKapatForm {
   cikisZamani: string;
   odemeTipi: "nakit" | "kredi_karti";
@@ -96,6 +107,22 @@ export default function GunSonu() {
     }
   }
 
+  // Ödemesi erkenden alınmış bir oturumda müşteri çıktığında oturumu kapatır;
+  // tutar yeniden hesaplanmaz (kasa ekranındaki "Çıkış Yaptı" ile aynı işlem).
+  async function cikisYaptiIsaretle(id: number) {
+    setHata(null);
+    setBasari(null);
+    setIslemYapiliyor(true);
+    try {
+      await api.checkOutSession(id);
+      await refresh();
+    } catch (e) {
+      setHata((e as Error).message);
+    } finally {
+      setIslemYapiliyor(false);
+    }
+  }
+
   function elleKapatBaslat(id: number) {
     setElleKapatId(id);
     setElleKapatForm({
@@ -141,14 +168,17 @@ export default function GunSonu() {
   }
 
   const gunAcik = gun?.acik === true;
-  const acikOturumVar = sessions.length > 0;
+  // Erken ödemesi alınmış oturumlar gün sonunu engellemez; sunucu gün
+  // kapanırken bunları otomatik olarak çıkış yapmış sayar.
+  const odenmemisOturumSayisi = sessions.filter((s) => !s.on_odeme_yapildi_mi).length;
+  const erkenOdenmisOturumSayisi = sessions.length - odenmemisOturumSayisi;
 
   return (
     <div className="page">
       <h1>Gün Sonu</h1>
       <p className="muted" style={{ marginBottom: 20 }}>
-        Sabah "Gün Başı" ile günü açın. Akşam, tüm açık oturumları kapattıktan sonra "Gün Sonu"
-        yaparak o güne ait tüm işlemleri içeren PDF raporunu indirin.
+        Sabah "Gün Başı" ile günü açın. Akşam, ödemesi alınmamış tüm açık oturumları kapattıktan
+        sonra "Gün Sonu" yaparak o güne ait tüm işlemleri içeren PDF raporunu indirin.
       </p>
 
       {hata && <div className="alert alert--error">{hata}</div>}
@@ -175,12 +205,18 @@ export default function GunSonu() {
                 <p className="muted">Başlangıç: {gun?.gun?.acilis_zamani}</p>
               </div>
               <div style={{ textAlign: "right" }}>
-                {acikOturumVar && (
+                {odenmemisOturumSayisi > 0 && (
                   <p style={{ color: "var(--terracotta-dark)", fontWeight: 700, marginBottom: 8 }}>
-                    {sessions.length} açık oturum var — gün sonu yapmadan önce hepsini kapatın
+                    Ödemesi alınmamış {odenmemisOturumSayisi} açık oturum var — gün sonu yapmadan önce hepsini kapatın
                   </p>
                 )}
-                <button onClick={gunSonuYap} disabled={acikOturumVar || islemYapiliyor}>
+                {odenmemisOturumSayisi === 0 && erkenOdenmisOturumSayisi > 0 && (
+                  <p className="muted" style={{ marginBottom: 8 }}>
+                    Erken ödemesi alınmış {erkenOdenmisOturumSayisi} müşteri gün sonunda otomatik olarak çıkış yapmış
+                    sayılacak.
+                  </p>
+                )}
+                <button onClick={gunSonuYap} disabled={odenmemisOturumSayisi > 0 || islemYapiliyor}>
                   {islemYapiliyor ? "İşleniyor..." : "Gün Sonu Yap"}
                 </button>
               </div>
@@ -198,12 +234,33 @@ export default function GunSonu() {
                     <th>Ad Soyad</th>
                     <th>Giriş Zamanı</th>
                     <th>Geçen Dakika</th>
-                    <th>Tahmini Tutar</th>
+                    <th>Tutar</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sessions.map((s) => {
+                    if (s.on_odeme_yapildi_mi) {
+                      return (
+                        <tr key={s.id}>
+                          <td>
+                            {s.ad} {s.soyad}
+                            <span className="badge badge--nakit" style={{ marginLeft: 8 }}>Erken Ödendi</span>
+                          </td>
+                          <td>{new Date(s.giris_zamani).toLocaleString()}</td>
+                          <td>{formatSureMetni(s.gecen_dakika)}</td>
+                          <td>
+                            {formatKurus(s.tahsil_tutar_kurus ?? 0)}{" "}
+                            <span className="muted">({odemeTipiEtiketi(s.odeme_tipi)}, ödendi)</span>
+                          </td>
+                          <td>
+                            <button className="ghost" disabled={islemYapiliyor} onClick={() => cikisYaptiIsaretle(s.id)}>
+                              Çıkış Yaptı
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    }
                     const tahminiTutar = tierUcretiHesapla(s.gecen_dakika, pricingPolicy);
                     return (
                     <Fragment key={s.id}>
