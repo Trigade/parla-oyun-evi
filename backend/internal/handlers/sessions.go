@@ -50,7 +50,8 @@ func (a *API) ListOpenSessions(w http.ResponseWriter, r *http.Request) {
 	result := []openSessionView{}
 	for rows.Next() {
 		var v openSessionView
-		if err := rows.Scan(&v.ID, &v.CustomerID, &v.Ad, &v.Soyad, &v.GirisZamani, &v.SureSecimiDakika, &v.OnOdemeYapildiMi); err != nil {
+		if err := rows.Scan(&v.ID, &v.CustomerID, &v.Ad, &v.Soyad, &v.GirisZamani, &v.SureSecimiDakika, &v.OnOdemeYapildiMi,
+			&v.TahsilTutarKurus, &v.OdemeTipi); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
