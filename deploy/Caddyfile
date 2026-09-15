@@ -1,0 +1,15 @@
+# SITE_ADDRESS .env içinden gelir:
+#   - Alan adı (ör. parla.ornek.com): Let's Encrypt ile otomatik HTTPS
+#   - ":80": sadece yerel ağ, düz HTTP
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	header {
+		# Tarayıcılar bu başlığı yalnızca HTTPS yanıtlarında dikkate alır;
+		# düz HTTP (LAN) kurulumunda zararsızdır.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy app:8080
+}

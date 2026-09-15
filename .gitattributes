@@ -1,0 +1,4 @@
+# Linux konteynerlerinde çalışan dosyalar Windows'ta CRLF'e dönüşürse bozulur.
+*.sh      text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf

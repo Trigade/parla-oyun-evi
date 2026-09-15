@@ -1,0 +1,89 @@
+# Üretim (production) kurulumu — ayrıntılar için DEPLOY.md.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Geliştirme ortamındaki docker-compose.yml'den ayrı bir proje adı ve ayrı
+# volume'ler kullanır; ikisi aynı makinede birbirine karışmadan çalışabilir.
+name: parla-prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-parla}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env icinde POSTGRES_PASSWORD ayarlanmali}
+      POSTGRES_DB: ${POSTGRES_DB:-parla_oyun_evi}
+      TZ: Europe/Istanbul
+    # Port dışarı açılmaz: veritabanına yalnızca aynı Docker ağındaki app ve
+    # backup servisleri erişir.
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    image: parla-oyun-evi:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-parla}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-parla_oyun_evi}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?.env icinde JWT_SECRET ayarlanmali}
+      AUTO_MIGRATE: "true"
+      TRUST_PROXY: "true"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      TZ: Europe/Istanbul
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-parla}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-parla_oyun_evi}
+      TZ: Europe/Istanbul
+      BACKUP_TIME: ${BACKUP_TIME:-0300}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+    volumes:
+      - ./backups/prod:/backups
+      - ./deploy/backup.sh:/usr/local/bin/parla-backup.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/parla-backup.sh"]
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:

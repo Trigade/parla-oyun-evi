@@ -1,0 +1,20 @@
+backend/jwt_secret.local
+*.local
+
+# Ortam/gizli ayarlar
+.env
+.env.*
+!.env.example
+!.env.prod.example
+!e2e/.env.example
+
+# Bağımlılıklar ve derleme çıktıları
+node_modules/
+frontend/dist/
+
+# Müşteri verisi (TC kimlik no vb.) içeren yedekler — KVKK
+backups/
+
+# Test çıktıları
+e2e/playwright-report/
+e2e/test-results/

@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+.git
+.claude
+e2e
+backups
+**/.env
+**/.env.*
+**/*.local
+*.docx
+*.md
+*.ps1
+*.bat

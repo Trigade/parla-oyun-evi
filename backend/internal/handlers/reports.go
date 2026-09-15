@@ -1,0 +1,100 @@
+package handlers
+
+import (
+	"net/http"
+	"time"
+)
+
+type dailyBreakdown struct {
+	Tarih        string `json:"tarih"`
+	CiroKurus    int64  `json:"ciro_kurus"`
+	OturumSayisi int64  `json:"oturum_sayisi"`
+}
+
+type reportResponse struct {
+	ToplamCiroKurus  int64            `json:"toplam_ciro_kurus"`
+	OturumSayisi     int64            `json:"oturum_sayisi"`
+	NakitKurus       int64            `json:"nakit_kurus"`
+	NakitSayisi      int64            `json:"nakit_sayisi"`
+	KrediKartiKurus  int64            `json:"kredi_karti_kurus"`
+	KrediKartiSayisi int64            `json:"kredi_karti_sayisi"`
+	GunlukKirilim    []dailyBreakdown `json:"gunluk_kirilim"`
+}
+
+// GetReport verilen tarih aralığında (kapanmış oturumların çıkış zamanına
+// göre) toplam ciroyu, oturum sayısını ve ödeme tipi dağılımını döner.
+// Sadece yönetici erişebilir (bkz. router).
+func (a *API) GetReport(w http.ResponseWriter, r *http.Request) {
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	if fromStr == "" || toStr == "" {
+		writeError(w, http.StatusBadRequest, "Başlangıç ve bitiş tarihi zorunludur.")
+		return
+	}
+
+	from, err := time.ParseInLocation("2006-01-02", fromStr, BusinessLocation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Geçersiz başlangıç tarihi.")
+		return
+	}
+	to, err := time.ParseInLocation("2006-01-02", toStr, BusinessLocation)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Geçersiz bitiş tarihi.")
+		return
+	}
+	// to tarihini (Türkiye saatiyle) gün sonuna kadar kapsayacak şekilde genişlet
+	toExclusive := to.Add(24 * time.Hour)
+
+	ctx := r.Context()
+	var resp reportResponse
+
+	err = a.DB.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(tahsil_tutar_kurus), 0),
+			COUNT(*),
+			COALESCE(SUM(tahsil_tutar_kurus) FILTER (WHERE odeme_tipi = 'nakit'), 0),
+			COUNT(*) FILTER (WHERE odeme_tipi = 'nakit'),
+			COALESCE(SUM(tahsil_tutar_kurus) FILTER (WHERE odeme_tipi = 'kredi_karti'), 0),
+			COUNT(*) FILTER (WHERE odeme_tipi = 'kredi_karti')
+		FROM sessions
+		WHERE durum = 'kapali' AND cikis_zamani >= $1 AND cikis_zamani < $2`,
+		from, toExclusive,
+	).Scan(
+		&resp.ToplamCiroKurus, &resp.OturumSayisi,
+		&resp.NakitKurus, &resp.NakitSayisi,
+		&resp.KrediKartiKurus, &resp.KrediKartiSayisi,
+	)
+	if err != nil {
+		writeServerError(w, http.StatusInternalServerError, "rapor hesaplanamadı", err)
+		return
+	}
+
+	rows, err := a.DB.Query(ctx, `
+		SELECT date(cikis_zamani AT TIME ZONE 'Europe/Istanbul') AS gun,
+			COALESCE(SUM(tahsil_tutar_kurus), 0), COUNT(*)
+		FROM sessions
+		WHERE durum = 'kapali' AND cikis_zamani >= $1 AND cikis_zamani < $2
+		GROUP BY gun
+		ORDER BY gun ASC`,
+		from, toExclusive,
+	)
+	if err != nil {
+		writeServerError(w, http.StatusInternalServerError, "günlük kırılım alınamadı", err)
+		return
+	}
+	defer rows.Close()
+
+	resp.GunlukKirilim = []dailyBreakdown{}
+	for rows.Next() {
+		var d dailyBreakdown
+		var gun time.Time
+		if err := rows.Scan(&gun, &d.CiroKurus, &d.OturumSayisi); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
+			return
+		}
+		d.Tarih = gun.Format("2006-01-02")
+		resp.GunlukKirilim = append(resp.GunlukKirilim, d)
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}

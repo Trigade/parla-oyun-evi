@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: parla-oyun-evi-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: parla
+      POSTGRES_PASSWORD: parla_dev_password
+      POSTGRES_DB: parla_oyun_evi
+    ports:
+      # Sadece localhost'a bağlanır: backend zaten aynı makinede çalışıyor,
+      # bu portun LAN'daki diğer cihazlara açık olmasına gerek yok — aksi
+      # halde uygulama katmanı (JWT) tamamen atlanıp DB'ye zayıf sabit
+      # şifreyle doğrudan bağlanılabilirdi.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
