@@ -470,7 +470,9 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 			COUNT(s.id) FILTER (WHERE s.durum = 'kapali'),
 			COALESCE(SUM(s.tahsil_tutar_kurus) FILTER (WHERE s.durum = 'kapali'), 0),
 			MAX(s.cikis_zamani),
-			BOOL_OR(s.durum = 'acik'),
+			-- Hiç oturumu olmayan müşteride BOOL_OR NULL döner (ör. Müşteriler
+			-- ekranından oturum açmadan eklenen kayıt); bu durumda "içeride değil".
+			COALESCE(BOOL_OR(s.durum = 'acik'), false),
 			(
 				SELECT cp.ad FROM customer_packages cp
 				WHERE cp.customer_id = c.id AND cp.haftalik_gun IS NOT NULL
