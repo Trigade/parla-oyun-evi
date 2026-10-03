@@ -365,7 +365,7 @@ export default function Musteriler() {
                 <th>Veli Telefonu</th>
                 <th>Ziyaret</th>
                 <th>Toplam Harcama</th>
-                <th>Paket Bakiyesi</th>
+                <th>Aktif Paket</th>
                 <th>Son Ziyaret</th>
               </tr>
             </thead>
@@ -383,7 +383,7 @@ export default function Musteriler() {
                   <td>{c.veli_telefon || "—"}</td>
                   <td>{c.toplam_oturum}</td>
                   <td>{formatKurus(c.toplam_harcama_kurus)}</td>
-                  <td>{c.kalan_paket_dakika > 0 ? `${c.kalan_paket_dakika} dk` : "—"}</td>
+                  <td>{c.aktif_paket ?? "—"}</td>
                   <td>{c.son_ziyaret ?? "—"}</td>
                 </tr>
               ))}
@@ -403,10 +403,7 @@ export default function Musteriler() {
                   {seciliMusteri.veli_telefon && <> · Veli Tel: {seciliMusteri.veli_telefon}</>}
                 </p>
                 <p className="muted">
-                  Paket Bakiyesi:{" "}
-                  <strong>
-                    {seciliMusteri.kalan_paket_dakika > 0 ? `${seciliMusteri.kalan_paket_dakika} dk` : "Yok"}
-                  </strong>
+                  Aktif Paket: <strong>{seciliMusteri.aktif_paket ?? "Yok"}</strong>
                 </p>
               </div>
               <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -564,8 +561,9 @@ export default function Musteriler() {
                   <thead>
                     <tr>
                       <th>Paket</th>
-                      <th>Tanımlı Dk</th>
-                      <th>Kalan Dk</th>
+                      <th>Haftalık Gün</th>
+                      <th>Günlük Süre</th>
+                      <th>Tutar</th>
                       <th>Geçerlilik Bitişi</th>
                       <th>Durum</th>
                     </tr>
@@ -574,16 +572,15 @@ export default function Musteriler() {
                     {paketler.map((p) => (
                       <tr key={p.id}>
                         <td>{p.ad}</td>
-                        <td>{p.toplam_dakika}</td>
-                        <td>{p.kalan_dakika}</td>
+                        <td>{p.haftalik_gun} gün</td>
+                        <td>{formatSureMetni(p.gunluk_dakika)}</td>
+                        <td>{formatKurus(p.tutar_kurus)}</td>
                         <td>{p.gecerlilik_bitis}</td>
                         <td>
                           {p.suresi_dolmus_mu ? (
                             <span className="muted">Süresi Doldu</span>
-                          ) : p.kalan_dakika > 0 ? (
-                            <span className="badge badge--nakit">Aktif</span>
                           ) : (
-                            <span className="muted">Tükendi</span>
+                            <span className="badge badge--nakit">Aktif</span>
                           )}
                         </td>
                       </tr>

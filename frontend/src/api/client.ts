@@ -211,7 +211,8 @@ export interface CustomerListItem {
   toplam_harcama_kurus: number;
   son_ziyaret?: string;
   acik_oturum_var: boolean;
-  kalan_paket_dakika: number;
+  // Müşterinin süresi dolmamış aboneliğinin adı; paketi yoksa gelmez.
+  aktif_paket?: string;
 }
 
 export interface CustomerSession {
@@ -328,19 +329,40 @@ export interface CurrentBusinessDayResponse {
 export interface PackageDefinition {
   id: number;
   ad: string;
-  dakika: number;
+  grup: string;
+  haftalik_gun: number;
+  gunluk_dakika: number;
+  aylik_ucret_kurus: number;
   aktif: boolean;
 }
 
 export interface CustomerPackage {
   id: number;
   ad: string;
-  toplam_dakika: number;
-  kalan_dakika: number;
+  grup: string;
+  haftalik_gun: number;
+  gunluk_dakika: number;
   tutar_kurus: number;
+  odeme_tipi: string;
   satin_alma_zamani: string;
   gecerlilik_bitis: string;
   suresi_dolmus_mu: boolean;
+}
+
+// Müşterinin aktif paketindeki güncel hak kullanımı (kasa ekranı için).
+export interface PackageStatus {
+  var: boolean;
+  customer_package_id?: number;
+  ad?: string;
+  grup?: string;
+  haftalik_gun?: number;
+  gunluk_dakika?: number;
+  bu_hafta_kullanilan_gun: number;
+  bugun_kullanilan_dakika: number;
+  kalan_gunluk_dakika: number;
+  bugun_pakete_sayildi_mi: boolean;
+  gun_hakki_doldu_mu: boolean;
+  gecerlilik_bitis?: string;
 }
 
 export const api = {
@@ -385,15 +407,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ tc_kimlik_no, ad, soyad, telefon, veli_telefon, sure_secimi_dakika }),
     }),
+  // paketModu: "" (paket kullanılmaz) | "ucretsiz" (tamamı pakete sayılır)
+  // | "asim" (günlük hak kadarı pakete sayılır, aşan süre tahsil edilir)
   closeSession: (
     id: number,
     odeme_tipi: "nakit" | "kredi_karti" | "paket",
     yuvarla: boolean,
-    indirimKurus = 0
+    indirimKurus = 0,
+    paketModu: "" | "ucretsiz" | "asim" = ""
   ) =>
     request(`/sessions/${id}/close`, {
       method: "POST",
-      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus }),
+      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus, paket_modu: paketModu }),
     }),
   payEarlySession: (
     id: number,
@@ -501,16 +526,34 @@ export const api = {
   endBusinessDay: (id: number) =>
     downloadFile(`/business-day/${id}/end`, `gun_sonu_${id}.pdf`, "POST"),
   listPackageDefinitions: () => request<PackageDefinition[]>("/package-definitions"),
-  createPackageDefinition: (ad: string, dakika: number) =>
+  createPackageDefinition: (
+    ad: string,
+    grup: string,
+    haftalikGun: number,
+    gunlukDakika: number,
+    aylikUcretKurus: number
+  ) =>
     request<PackageDefinition>("/package-definitions", {
       method: "POST",
-      body: JSON.stringify({ ad, dakika }),
+      body: JSON.stringify({
+        ad,
+        grup,
+        haftalik_gun: haftalikGun,
+        gunluk_dakika: gunlukDakika,
+        aylik_ucret_kurus: aylikUcretKurus,
+      }),
     }),
   listCustomerPackages: (customerId: number) =>
     request<CustomerPackage[]>(`/customers/${customerId}/packages`),
-  purchasePackage: (customerId: number, packageDefinitionId: number) =>
+  getCustomerPackageStatus: (customerId: number) =>
+    request<PackageStatus>(`/customers/${customerId}/package-status`),
+  purchasePackage: (
+    customerId: number,
+    packageDefinitionId: number,
+    odemeTipi: "nakit" | "kredi_karti"
+  ) =>
     request<CustomerPackage>(`/customers/${customerId}/packages`, {
       method: "POST",
-      body: JSON.stringify({ package_definition_id: packageDefinitionId }),
+      body: JSON.stringify({ package_definition_id: packageDefinitionId, odeme_tipi: odemeTipi }),
     }),
 };

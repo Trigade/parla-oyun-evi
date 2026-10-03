@@ -267,6 +267,7 @@ func main() {
 			r.Get("/customers/by-tc/{tc}", api.LookupCustomerByTC)
 			r.Get("/customers/by-phone/{telefon}", api.LookupCustomerByPhone)
 			r.Get("/customers/{id}/packages", api.ListCustomerPackages)
+			r.Get("/customers/{id}/package-status", api.GetCustomerPackageStatus)
 
 			// "gun_sonu" izni (veya is_admin) gereken uçlar
 			r.Group(func(r chi.Router) {

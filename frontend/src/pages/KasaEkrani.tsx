@@ -4,8 +4,8 @@ import {
   formatSureMetni,
   tierUcretiHesapla,
   type CustomerListItem,
-  type CustomerPackage,
   type OpenSession,
+  type PackageStatus,
   type PricingPolicy,
 } from "../api/client";
 
@@ -66,7 +66,7 @@ export default function KasaEkrani() {
   const [indirimTipi, setIndirimTipi] = useState<"tutar" | "yuzde">("tutar");
   const [indirimDeger, setIndirimDeger] = useState("");
 
-  const [musteriPaketleri, setMusteriPaketleri] = useState<CustomerPackage[]>([]);
+  const [paketDurumu, setPaketDurumu] = useState<PackageStatus | null>(null);
 
   const [sureSecimi, setSureSecimi] = useState<number | null>(null);
 
@@ -258,23 +258,25 @@ export default function KasaEkrani() {
     setIndirimAcik(false);
     setIndirimTipi("tutar");
     setIndirimDeger("");
-    setMusteriPaketleri([]);
+    setPaketDurumu(null);
   }
 
+  // Seçilen oturumun müşterisinin abonelik durumu (bu hafta kaç gün kullandı,
+  // bugün ne kadar hakkı kaldı) kasiyere gösterilmek üzere alınır.
   useEffect(() => {
     const session = sessions.find((s) => s.id === seciliSessionId);
     if (!session) {
-      setMusteriPaketleri([]);
+      setPaketDurumu(null);
       return;
     }
     let iptal = false;
     api
-      .listCustomerPackages(session.customer_id)
+      .getCustomerPackageStatus(session.customer_id)
       .then((sonuc) => {
-        if (!iptal) setMusteriPaketleri(sonuc);
+        if (!iptal) setPaketDurumu(sonuc);
       })
       .catch(() => {
-        if (!iptal) setMusteriPaketleri([]);
+        if (!iptal) setPaketDurumu(null);
       });
     return () => {
       iptal = true;
@@ -282,11 +284,23 @@ export default function KasaEkrani() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seciliSessionId]);
 
-  async function odendiIsaretle(id: number, odemeTipi: "nakit" | "kredi_karti" | "paket") {
+  // paketModu: "" normal tahsilat, "ucretsiz" tamamı pakete sayılır,
+  // "asim" günlük hak kadarı pakete sayılıp aşan süre tahsil edilir.
+  async function odendiIsaretle(
+    id: number,
+    odemeTipi: "nakit" | "kredi_karti" | "paket",
+    paketModu: "" | "ucretsiz" | "asim" = ""
+  ) {
     setHata(null);
     setKapatiliyor(true);
     try {
-      await api.closeSession(id, odemeTipi, odemeTipi === "paket" ? false : yuvarla, odemeTipi === "paket" ? 0 : indirimKurus);
+      await api.closeSession(
+        id,
+        odemeTipi,
+        paketModu === "ucretsiz" ? false : yuvarla,
+        paketModu === "ucretsiz" ? 0 : indirimKurus,
+        paketModu
+      );
       seciliSessionSifirla();
       await refresh();
     } catch (e) {
@@ -383,10 +397,11 @@ export default function KasaEkrani() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, simdi]);
 
-  const kalanPaketBakiyesi = musteriPaketleri
-    .filter((p) => !p.suresi_dolmus_mu)
-    .reduce((toplam, p) => toplam + p.kalan_dakika, 0);
-  const bakiyeYeterliMi = canliDakika > 0 && kalanPaketBakiyesi >= canliDakika;
+  // Paketli müşteride günlük hakkı aşan süre ve bunun ücreti; kararı kasiyer verir.
+  const paketVar = paketDurumu?.var === true;
+  const paketKalanGunlukDakika = paketDurumu?.kalan_gunluk_dakika ?? 0;
+  const paketAsanDakika = paketVar ? Math.max(0, canliDakika - paketKalanGunlukDakika) : 0;
+  const paketAsanTutar = paketAsanDakika > 0 ? tierUcretiHesapla(paketAsanDakika, pricingPolicy) : null;
 
   const tahminiTutarHam = tierUcretiHesapla(canliDakika, pricingPolicy);
   const yuvarlanmisTutar = tahminiTutarHam != null && yuvarla ? yuvarlaKurus(tahminiTutarHam) : tahminiTutarHam;
@@ -745,10 +760,10 @@ export default function KasaEkrani() {
                   <div className="stat-card__label">Geçen Süre</div>
                   <div className="stat-card__value">{formatSureMetni(canliDakika)}</div>
                 </div>
-                {kalanPaketBakiyesi > 0 && (
+                {paketVar && (
                   <div className="stat-card">
-                    <div className="stat-card__label">Paket Bakiyesi</div>
-                    <div className="stat-card__value">{kalanPaketBakiyesi} dk</div>
+                    <div className="stat-card__label">Paket</div>
+                    <div className="stat-card__value" style={{ fontSize: 18 }}>{paketDurumu?.ad}</div>
                   </div>
                 )}
                 {indirimKurus > 0 && (
@@ -764,6 +779,69 @@ export default function KasaEkrani() {
                   </div>
                 </div>
               </div>
+
+              {paketVar && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 14,
+                    borderRadius: 10,
+                    background: "var(--cream-soft)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                    {paketDurumu?.ad}
+                    {paketDurumu?.grup ? ` · ${paketDurumu.grup}` : ""}
+                  </div>
+                  <div>
+                    Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün ·
+                    Bugün kalan hak: {formatSureMetni(paketKalanGunlukDakika)} ·
+                    Geçerlilik: {paketDurumu?.gecerlilik_bitis}
+                  </div>
+                  {paketDurumu?.gun_hakki_doldu_mu && (
+                    <div style={{ color: "var(--terracotta-dark)", fontWeight: 600, marginTop: 6 }}>
+                      Haftalık gün hakkı doldu. Yine de ücretsiz kapatabilir ya da normal ücret alabilirsiniz.
+                    </div>
+                  )}
+                  {paketAsanDakika > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      Günlük hakkı {formatSureMetni(paketAsanDakika)} aşıyor
+                      {paketAsanTutar != null && paketAsanTutar > 0
+                        ? ` · aşan süre ücreti ${formatKurus(paketAsanTutar)}`
+                        : ""}
+                      .
+                    </div>
+                  )}
+                  <div className="field-row" style={{ marginTop: 10 }}>
+                    <button
+                      className="secondary"
+                      disabled={kapatiliyor}
+                      onClick={() => odendiIsaretle(seciliSession.id, "paket", "ucretsiz")}
+                    >
+                      Paketten Düş (Ücretsiz)
+                    </button>
+                    {paketAsanDakika > 0 && (
+                      <>
+                        <button
+                          className="ghost"
+                          disabled={kapatiliyor}
+                          onClick={() => odendiIsaretle(seciliSession.id, "nakit", "asim")}
+                        >
+                          Aşanı Tahsil Et: Nakit
+                        </button>
+                        <button
+                          className="ghost"
+                          disabled={kapatiliyor}
+                          onClick={() => odendiIsaretle(seciliSession.id, "kredi_karti", "asim")}
+                        >
+                          Aşanı Tahsil Et: Kredi Kartı
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="field-row" style={{ marginTop: 16, alignItems: "center" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
@@ -819,16 +897,6 @@ export default function KasaEkrani() {
                 >
                   Kredi Kartı Ödendi
                 </button>
-                {musteriPaketleri.length > 0 && (
-                  <button
-                    className={bakiyeYeterliMi ? "secondary" : "ghost"}
-                    disabled={kapatiliyor || !bakiyeYeterliMi}
-                    title={bakiyeYeterliMi ? undefined : "Paket bakiyesi bu oturumun tamamını karşılamıyor"}
-                    onClick={() => odendiIsaretle(seciliSession.id, "paket")}
-                  >
-                    Bakiyeden Düş
-                  </button>
-                )}
               </div>
 
               {seciliSession.sure_secimi_dakika != null && (

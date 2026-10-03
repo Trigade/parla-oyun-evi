@@ -1,40 +1,24 @@
 import { useEffect, useState } from "react";
 import {
   api,
+  formatSureMetni,
   getIsAdmin,
   type CustomerListItem,
   type CustomerPackage,
   type PackageDefinition,
-  type PricingRule,
 } from "../api/client";
 
 function formatKurus(kurus: number) {
   return (kurus / 100).toLocaleString("tr-TR", { style: "currency", currency: "TRY" });
 }
 
-// Paket satışı şimdilik kapalı. Yeniden açmak için false yapın; backend'deki
-// paketSatisiBakimda sabiti de (handlers/packages.go) aynı şekilde güncellenmeli.
-const PAKET_SATISI_BAKIMDA = true;
-
-export default function SatinAlma() {
-  if (PAKET_SATISI_BAKIMDA) {
-    return (
-      <div className="page">
-        <h1>Satın Alma</h1>
-        <div className="card">
-          <h2>Bu bölüm bakımda</h2>
-          <p className="muted">
-            Paket satışı ve yeni paket türü tanımlama şimdilik kapalı. Müşterilerin daha önce aldığı
-            paketlerin bakiyesi kasa ekranında kullanılmaya devam eder.
-          </p>
-        </div>
-      </div>
-    );
-  }
-  return <SatinAlmaIcerik />;
+function odemeTipiEtiketi(odemeTipi: string) {
+  if (odemeTipi === "kredi_karti") return "Kredi Kartı";
+  if (odemeTipi === "nakit") return "Nakit";
+  return "—";
 }
 
-function SatinAlmaIcerik() {
+export default function SatinAlma() {
   const isAdmin = getIsAdmin();
 
   const [query, setQuery] = useState("");
@@ -44,7 +28,7 @@ function SatinAlmaIcerik() {
 
   const [paketler, setPaketler] = useState<PackageDefinition[]>([]);
   const [seciliPaketId, setSeciliPaketId] = useState<number | null>(null);
-  const [aktifFiyat, setAktifFiyat] = useState<PricingRule | null>(null);
+  const [odemeTipi, setOdemeTipi] = useState<"nakit" | "kredi_karti">("nakit");
 
   const [musteriPaketleri, setMusteriPaketleri] = useState<CustomerPackage[]>([]);
   const [musteriPaketleriYukleniyor, setMusteriPaketleriYukleniyor] = useState(false);
@@ -54,18 +38,17 @@ function SatinAlmaIcerik() {
   const [basari, setBasari] = useState<string | null>(null);
 
   const [yeniPaketAdi, setYeniPaketAdi] = useState("");
-  const [yeniPaketDakika, setYeniPaketDakika] = useState("");
+  const [yeniGrup, setYeniGrup] = useState("Standart");
+  const [yeniHaftalikGun, setYeniHaftalikGun] = useState("3");
+  const [yeniGunlukSaat, setYeniGunlukSaat] = useState("4");
+  const [yeniAylikUcret, setYeniAylikUcret] = useState("");
   const [paketOlusturuluyor, setPaketOlusturuluyor] = useState(false);
   const [paketTanimHata, setPaketTanimHata] = useState<string | null>(null);
 
   async function paketleriYukle() {
     try {
-      const [tanimlar, fiyat] = await Promise.all([
-        api.listPackageDefinitions(),
-        api.getActivePricingRule().catch(() => null),
-      ]);
+      const tanimlar = await api.listPackageDefinitions();
       setPaketler(tanimlar);
-      setAktifFiyat(fiyat);
       if (tanimlar.length > 0) setSeciliPaketId((prev) => prev ?? tanimlar[0].id);
     } catch (e) {
       setHata((e as Error).message);
@@ -115,8 +98,6 @@ function SatinAlmaIcerik() {
   }
 
   const seciliPaket = paketler.find((p) => p.id === seciliPaketId) ?? null;
-  const tahminiTutar =
-    seciliPaket && aktifFiyat ? seciliPaket.dakika * aktifFiyat.kurus_per_dakika : null;
 
   async function satinAl() {
     if (!seciliMusteri || !seciliPaketId) return;
@@ -124,11 +105,11 @@ function SatinAlmaIcerik() {
     setBasari(null);
     setSatinAliniyor(true);
     try {
-      const kayit = await api.purchasePackage(seciliMusteri.id, seciliPaketId);
+      const kayit = await api.purchasePackage(seciliMusteri.id, seciliPaketId, odemeTipi);
       setBasari(
-        `"${kayit.ad}" paketi ${seciliMusteri.ad} ${seciliMusteri.soyad} için ${formatKurus(
-          kayit.tutar_kurus
-        )} karşılığında tanımlandı.`
+        `"${kayit.ad}" paketi ${seciliMusteri.ad} ${seciliMusteri.soyad} için tanımlandı. ` +
+          `${formatKurus(kayit.tutar_kurus)} (${odemeTipiEtiketi(kayit.odeme_tipi)}) tahsil edildi, ` +
+          `${kayit.gecerlilik_bitis} tarihine kadar geçerli.`
       );
       await musteriPaketleriYukle(seciliMusteri.id);
     } catch (e) {
@@ -140,20 +121,36 @@ function SatinAlmaIcerik() {
 
   async function paketTanimla() {
     setPaketTanimHata(null);
-    const dakika = Number(yeniPaketDakika);
+    const haftalikGun = Number(yeniHaftalikGun);
+    const gunlukSaat = Number(yeniGunlukSaat.replace(",", "."));
+    const aylikUcret = Number(yeniAylikUcret.replace(",", "."));
     if (!yeniPaketAdi.trim()) {
       setPaketTanimHata("Paket adı girin.");
       return;
     }
-    if (!Number.isFinite(dakika) || dakika <= 0) {
-      setPaketTanimHata("Geçerli bir dakika miktarı girin.");
+    if (!Number.isInteger(haftalikGun) || haftalikGun < 1 || haftalikGun > 7) {
+      setPaketTanimHata("Haftalık gün 1 ile 7 arasında olmalı.");
+      return;
+    }
+    if (!Number.isFinite(gunlukSaat) || gunlukSaat <= 0 || gunlukSaat > 24) {
+      setPaketTanimHata("Günlük süre 0'dan büyük ve en fazla 24 saat olmalı.");
+      return;
+    }
+    if (!Number.isFinite(aylikUcret) || aylikUcret < 0) {
+      setPaketTanimHata("Geçerli bir aylık ücret girin.");
       return;
     }
     setPaketOlusturuluyor(true);
     try {
-      await api.createPackageDefinition(yeniPaketAdi.trim(), Math.round(dakika));
+      await api.createPackageDefinition(
+        yeniPaketAdi.trim(),
+        yeniGrup.trim() || "Standart",
+        haftalikGun,
+        Math.round(gunlukSaat * 60),
+        Math.round(aylikUcret * 100)
+      );
       setYeniPaketAdi("");
-      setYeniPaketDakika("");
+      setYeniAylikUcret("");
       await paketleriYukle();
     } catch (e) {
       setPaketTanimHata((e as Error).message);
@@ -162,27 +159,56 @@ function SatinAlmaIcerik() {
     }
   }
 
-  const toplamKalanDakika = musteriPaketleri
-    .filter((p) => !p.suresi_dolmus_mu)
-    .reduce((toplam, p) => toplam + p.kalan_dakika, 0);
+  const aktifPaket = musteriPaketleri.find((p) => !p.suresi_dolmus_mu) ?? null;
 
   return (
-    <div className="page">
+    <div className="page page--wide">
       <h1>Satın Alma</h1>
       <p className="muted" style={{ marginBottom: 20 }}>
-        Müşteriye aylık dakika paketi tanımlayın. Tutar, satın alma anındaki aktif dakika
-        ücretinden hesaplanır ve dondurulur; müşteri giriş/çıkış yaptıkça kalan dakikasından
-        düşülür, paketi bittiğinde normal dakika ücreti üzerinden tahsilat yapılmaya devam eder.
+        Müşteriye aylık paket tanımlayın. Paket, haftada belirli gün ve günde belirli süre
+        kullanım hakkı verir; ücreti satın alma anında dondurulur ve o günün cirosuna eklenir.
+        Paketli müşteri kasada geldiğinde ücret istenmez, kasiyer "Paketten Düş" ile kapatır.
       </p>
 
       {hata && <div className="alert alert--error">{hata}</div>}
       {basari && <div className="alert alert--success">{basari}</div>}
 
       <div className="card" style={{ marginBottom: 20 }}>
+        <h2>Paketler</h2>
+        {paketler.length === 0 ? (
+          <p className="muted">Henüz tanımlı bir paket yok.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Paket İsmi</th>
+                <th>Yaş / Grup</th>
+                <th>Haftalık Gün</th>
+                <th>Günlük Süre</th>
+                <th>Aylık Ücret</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paketler.map((p) => (
+                <tr key={p.id}>
+                  <td style={{ fontWeight: 600 }}>{p.ad}</td>
+                  <td>{p.grup}</td>
+                  <td>{p.haftalik_gun} Gün</td>
+                  <td>{formatSureMetni(p.gunluk_dakika)}</td>
+                  <td>{formatKurus(p.aylik_ucret_kurus)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 20 }}>
         <h2>Müşteri Seç</h2>
         <div className="field">
-          <label>Ara (ad, soyad, TC kimlik no veya telefon)</label>
+          <label htmlFor="paket-musteri-ara">Ara (ad, soyad, TC kimlik no veya telefon)</label>
           <input
+            id="paket-musteri-ara"
             placeholder="Örn: Ahmet ya da 12345678901"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -200,6 +226,7 @@ function SatinAlmaIcerik() {
                   </td>
                   <td>{c.tc_kimlik_no}</td>
                   <td>{c.telefon || "—"}</td>
+                  <td className="muted">{c.aktif_paket ?? "Paketi yok"}</td>
                 </tr>
               ))}
             </tbody>
@@ -214,11 +241,14 @@ function SatinAlmaIcerik() {
             <span className="muted"> · TC: {seciliMusteri.tc_kimlik_no} · Tel: {seciliMusteri.telefon || "—"}</span>
             <div style={{ marginTop: 4 }}>
               {musteriPaketleriYukleniyor ? (
-                <span className="muted">Paket bakiyesi yükleniyor...</span>
-              ) : (
+                <span className="muted">Paket bilgisi yükleniyor...</span>
+              ) : aktifPaket ? (
                 <span>
-                  Kalan Paket Bakiyesi: <strong>{toplamKalanDakika} dakika</strong>
+                  Aktif paket: <strong>{aktifPaket.ad}</strong> · haftada {aktifPaket.haftalik_gun} gün ·
+                  günde {formatSureMetni(aktifPaket.gunluk_dakika)} · {aktifPaket.gecerlilik_bitis} tarihine kadar
                 </span>
+              ) : (
+                <span className="muted">Aktif paketi yok.</span>
               )}
             </div>
           </div>
@@ -227,35 +257,53 @@ function SatinAlmaIcerik() {
 
       {seciliMusteri && (
         <div className="card" style={{ marginBottom: 20 }}>
-          <h2>Paket Satın Al</h2>
+          <h2>Paket Tanımla</h2>
           {paketler.length === 0 ? (
-            <p className="muted">Henüz tanımlı bir paket türü yok.</p>
+            <p className="muted">Önce bir paket türü tanımlanmalı.</p>
           ) : (
-            <div className="field-row">
-              <div className="field">
-                <label>Paket</label>
-                <select
-                  value={seciliPaketId ?? ""}
-                  onChange={(e) => setSeciliPaketId(Number(e.target.value))}
-                  style={{ maxWidth: 220 }}
-                >
-                  {paketler.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.ad} ({p.dakika} dk)
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Tahmini Tutar</label>
-                <div className="stat-card__value" style={{ fontSize: 20 }}>
-                  {tahminiTutar != null ? formatKurus(tahminiTutar) : "—"}
+            <>
+              <div className="field-row" style={{ alignItems: "flex-end" }}>
+                <div className="field">
+                  <label htmlFor="paket-secimi">Paket</label>
+                  <select
+                    id="paket-secimi"
+                    value={seciliPaketId ?? ""}
+                    onChange={(e) => setSeciliPaketId(Number(e.target.value))}
+                    style={{ maxWidth: 280 }}
+                  >
+                    {paketler.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.ad} ({p.haftalik_gun} gün / {formatSureMetni(p.gunluk_dakika)})
+                      </option>
+                    ))}
+                  </select>
                 </div>
+                <div className="field">
+                  <label htmlFor="paket-odeme-tipi">Ödeme Tipi</label>
+                  <select
+                    id="paket-odeme-tipi"
+                    value={odemeTipi}
+                    onChange={(e) => setOdemeTipi(e.target.value as "nakit" | "kredi_karti")}
+                    style={{ maxWidth: 160 }}
+                  >
+                    <option value="nakit">Nakit</option>
+                    <option value="kredi_karti">Kredi Kartı</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Tahsil Edilecek</label>
+                  <div className="stat-card__value" style={{ fontSize: 20 }}>
+                    {seciliPaket ? formatKurus(seciliPaket.aylik_ucret_kurus) : "—"}
+                  </div>
+                </div>
+                <button onClick={satinAl} disabled={satinAliniyor || !seciliPaketId}>
+                  {satinAliniyor ? "İşleniyor..." : "Satın Al ve Tanımla"}
+                </button>
               </div>
-              <button onClick={satinAl} disabled={satinAliniyor || !seciliPaketId}>
-                {satinAliniyor ? "İşleniyor..." : "Satın Al ve Tanımla"}
-              </button>
-            </div>
+              <p className="muted" style={{ marginTop: 8 }}>
+                Paket, tanımlandığı tarihten itibaren 1 ay geçerlidir ve tutar bugünün cirosuna eklenir.
+              </p>
+            </>
           )}
 
           {musteriPaketleri.length > 0 && (
@@ -263,9 +311,10 @@ function SatinAlmaIcerik() {
               <thead>
                 <tr>
                   <th>Paket</th>
-                  <th>Toplam Dk</th>
-                  <th>Kalan Dk</th>
+                  <th>Haftalık Gün</th>
+                  <th>Günlük Süre</th>
                   <th>Tutar</th>
+                  <th>Ödeme</th>
                   <th>Satın Alma</th>
                   <th>Geçerlilik Bitişi</th>
                   <th>Durum</th>
@@ -275,18 +324,17 @@ function SatinAlmaIcerik() {
                 {musteriPaketleri.map((p) => (
                   <tr key={p.id}>
                     <td>{p.ad}</td>
-                    <td>{p.toplam_dakika}</td>
-                    <td>{p.kalan_dakika}</td>
+                    <td>{p.haftalik_gun} gün</td>
+                    <td>{formatSureMetni(p.gunluk_dakika)}</td>
                     <td>{formatKurus(p.tutar_kurus)}</td>
+                    <td>{odemeTipiEtiketi(p.odeme_tipi)}</td>
                     <td>{p.satin_alma_zamani}</td>
                     <td>{p.gecerlilik_bitis}</td>
                     <td>
                       {p.suresi_dolmus_mu ? (
                         <span className="muted">Süresi Doldu</span>
-                      ) : p.kalan_dakika > 0 ? (
-                        <span className="badge badge--nakit">Aktif</span>
                       ) : (
-                        <span className="muted">Tükendi</span>
+                        <span className="badge badge--nakit">Aktif</span>
                       )}
                     </td>
                   </tr>
@@ -300,23 +348,60 @@ function SatinAlmaIcerik() {
       {isAdmin && (
         <div className="card">
           <h2>Yeni Paket Türü Tanımla</h2>
-          <div className="field-row">
+          <div className="field-row" style={{ alignItems: "flex-end" }}>
             <div className="field">
-              <label>Paket Adı</label>
+              <label htmlFor="yeni-paket-adi">Paket Adı</label>
               <input
-                placeholder="Örn: Aylık 1000 Dakika"
+                id="yeni-paket-adi"
+                placeholder="Örn: 5 Günlük Paket"
                 value={yeniPaketAdi}
                 onChange={(e) => setYeniPaketAdi(e.target.value)}
                 style={{ maxWidth: 220 }}
               />
             </div>
             <div className="field">
-              <label>Dakika</label>
+              <label htmlFor="yeni-paket-grup">Yaş / Grup</label>
               <input
-                placeholder="Örn: 1000"
-                value={yeniPaketDakika}
-                onChange={(e) => setYeniPaketDakika(e.target.value)}
+                id="yeni-paket-grup"
+                placeholder="Örn: Standart"
+                value={yeniGrup}
+                onChange={(e) => setYeniGrup(e.target.value)}
+                style={{ maxWidth: 160 }}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="yeni-paket-gun">Haftalık Gün</label>
+              <select
+                id="yeni-paket-gun"
+                value={yeniHaftalikGun}
+                onChange={(e) => setYeniHaftalikGun(e.target.value)}
                 style={{ maxWidth: 120 }}
+              >
+                {[1, 2, 3, 4, 5, 6, 7].map((g) => (
+                  <option key={g} value={g}>
+                    {g} Gün
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="yeni-paket-saat">Günlük Süre (saat)</label>
+              <input
+                id="yeni-paket-saat"
+                placeholder="Örn: 4"
+                value={yeniGunlukSaat}
+                onChange={(e) => setYeniGunlukSaat(e.target.value)}
+                style={{ maxWidth: 140 }}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="yeni-paket-ucret">Aylık Ücret (TL)</label>
+              <input
+                id="yeni-paket-ucret"
+                placeholder="Örn: 14000"
+                value={yeniAylikUcret}
+                onChange={(e) => setYeniAylikUcret(e.target.value)}
+                style={{ maxWidth: 160 }}
               />
             </div>
             <button onClick={paketTanimla} disabled={paketOlusturuluyor}>
@@ -324,25 +409,6 @@ function SatinAlmaIcerik() {
             </button>
           </div>
           {paketTanimHata && <div className="alert alert--error" style={{ marginTop: 12 }}>{paketTanimHata}</div>}
-
-          {paketler.length > 0 && (
-            <table style={{ marginTop: 16 }}>
-              <thead>
-                <tr>
-                  <th>Paket Adı</th>
-                  <th>Dakika</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paketler.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.ad}</td>
-                    <td>{p.dakika}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
         </div>
       )}
     </div>

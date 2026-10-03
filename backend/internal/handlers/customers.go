@@ -444,17 +444,17 @@ func (a *API) DeleteCustomer(w http.ResponseWriter, r *http.Request) {
 }
 
 type customerListItem struct {
-	ID               int64   `json:"id"`
-	TCKimlikNo       string  `json:"tc_kimlik_no"`
-	Ad               string  `json:"ad"`
-	Soyad            string  `json:"soyad"`
-	Telefon          string  `json:"telefon"`
-	VeliTelefon      *string `json:"veli_telefon,omitempty"`
-	ToplamOturum     int64   `json:"toplam_oturum"`
-	ToplamHarcama    int64   `json:"toplam_harcama_kurus"`
-	SonZiyaret       *string `json:"son_ziyaret,omitempty"`
-	AcikOturumVar    bool    `json:"acik_oturum_var"`
-	KalanPaketDakika int64   `json:"kalan_paket_dakika"`
+	ID            int64   `json:"id"`
+	TCKimlikNo    string  `json:"tc_kimlik_no"`
+	Ad            string  `json:"ad"`
+	Soyad         string  `json:"soyad"`
+	Telefon       string  `json:"telefon"`
+	VeliTelefon   *string `json:"veli_telefon,omitempty"`
+	ToplamOturum  int64   `json:"toplam_oturum"`
+	ToplamHarcama int64   `json:"toplam_harcama_kurus"`
+	SonZiyaret    *string `json:"son_ziyaret,omitempty"`
+	AcikOturumVar bool    `json:"acik_oturum_var"`
+	AktifPaket    *string `json:"aktif_paket,omitempty"`
 }
 
 // ListCustomers tüm müşterileri, toplam ziyaret sayısı ve toplam harcaması
@@ -471,10 +471,12 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(s.tahsil_tutar_kurus) FILTER (WHERE s.durum = 'kapali'), 0),
 			MAX(s.cikis_zamani),
 			BOOL_OR(s.durum = 'acik'),
-			COALESCE((
-				SELECT SUM(cp.kalan_dakika) FROM customer_packages cp
-				WHERE cp.customer_id = c.id AND cp.gecerlilik_bitis > now()
-			), 0)
+			(
+				SELECT cp.ad FROM customer_packages cp
+				WHERE cp.customer_id = c.id AND cp.haftalik_gun IS NOT NULL
+					AND cp.gecerlilik_bitis > now()
+				ORDER BY cp.satin_alma_zamani DESC LIMIT 1
+			)
 		FROM customers c
 		LEFT JOIN sessions s ON s.customer_id = c.id
 		WHERE c.deleted_at IS NULL
@@ -493,7 +495,7 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		var sonZiyaret *time.Time
 		if err := rows.Scan(
 			&item.ID, &item.TCKimlikNo, &item.Ad, &item.Soyad, &item.Telefon, &item.VeliTelefon,
-			&item.ToplamOturum, &item.ToplamHarcama, &sonZiyaret, &item.AcikOturumVar, &item.KalanPaketDakika,
+			&item.ToplamOturum, &item.ToplamHarcama, &sonZiyaret, &item.AcikOturumVar, &item.AktifPaket,
 		); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return

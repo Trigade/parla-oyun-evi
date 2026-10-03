@@ -65,6 +65,12 @@ type closeSessionRequest struct {
 	OdemeTipi    string `json:"odeme_tipi"` // "nakit" | "kredi_karti" | "paket"
 	Yuvarla      bool   `json:"yuvarla"`
 	IndirimKurus int64  `json:"indirim_kurus"` // sabit tutar veya yüzdeden hesaplanmış, frontend gönderir
+	// PaketModu, müşterinin abonelik paketi varsa kasiyerin verdiği karardır:
+	//   ""         → paket kullanılmaz, tüm süre normal fiyatlandırılır
+	//   "ucretsiz" → oturumun tamamı pakete sayılır, ücret alınmaz
+	//   "asim"     → günlük hak kadarı pakete sayılır, aşan süre tahsil edilir
+	//                (bu durumda odeme_tipi nakit/kredi_karti olmalıdır)
+	PaketModu string `json:"paket_modu"`
 }
 
 // CloseSession oturumu çıkış anıyla kapatır: aktif fiyat kuralına göre tam
@@ -85,12 +91,22 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" && req.OdemeTipi != "paket" {
-		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit', 'Kredi Kartı' veya 'Paket' olmalıdır.")
+	if req.PaketModu != "" && req.PaketModu != "ucretsiz" && req.PaketModu != "asim" {
+		writeError(w, http.StatusBadRequest, "Geçersiz paket seçimi.")
 		return
 	}
-	if req.OdemeTipi == "paket" && req.IndirimKurus != 0 {
-		writeError(w, http.StatusBadRequest, "Paket bakiyesinden düşülen bir oturuma indirim uygulanamaz.")
+	if req.PaketModu == "ucretsiz" {
+		// Tamamı pakete sayılan oturumda tahsilat yoktur; yuvarlama/indirim anlamsızdır.
+		req.OdemeTipi = "paket"
+		req.Yuvarla = false
+		req.IndirimKurus = 0
+	}
+	if req.OdemeTipi == "paket" && req.PaketModu != "ucretsiz" {
+		writeError(w, http.StatusBadRequest, "Pakete saymak için 'Paketten Düş' seçeneğini kullanın.")
+		return
+	}
+	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" && req.OdemeTipi != "paket" {
+		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit' veya 'Kredi Kartı' olmalıdır.")
 		return
 	}
 	if req.IndirimKurus < 0 {
@@ -154,26 +170,40 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// "paket" ödeme tipi yalnızca oturumun tamamı paket bakiyesinden
-	// karşılanabiliyorsa kabul edilir; yetersizse işlem geri alınır (tx henüz
-	// commit edilmediği için dusPaketVeHesapla'nın UPDATE'leri de geri alınır).
-	// Bloklu (sabit) ücretlendirmede paket ile kısmi/karma ödeme anlamlı
-	// olmadığından, nakit/kredi kartı ödemelerinde paket bakiyesine dokunulmaz.
+	// Paket seçildiyse müşterinin aktif aboneliği ve o günkü kalan hakkı
+	// hesaplanır. "ucretsiz" oturumun tamamını pakete sayar; "asim" ise
+	// yalnızca günlük hak kadarını pakete sayıp aşan süreyi ücretlendirir.
+	// Kararı kasiyer verir (bkz. closeSessionRequest.PaketModu).
+	var paketID *int64
 	var paketDusulen int64
+	ucretlendirilecekDakika := toplamDakika
+	if req.PaketModu != "" {
+		durum, err := aktifPaketDurumu(ctx, tx, customerID)
+		if err != nil {
+			writeServerError(w, http.StatusInternalServerError, "paket durumu alınamadı", err)
+			return
+		}
+		if !durum.Var {
+			writeError(w, http.StatusConflict, "Müşterinin geçerli bir paketi yok.")
+			return
+		}
+		paketID = &durum.CustomerPackageID
+		if req.PaketModu == "ucretsiz" {
+			paketDusulen = toplamDakika
+			ucretlendirilecekDakika = 0
+		} else {
+			paketDusulen = durum.KalanGunlukDakika
+			if paketDusulen > toplamDakika {
+				paketDusulen = toplamDakika
+			}
+			ucretlendirilecekDakika = toplamDakika - paketDusulen
+		}
+	}
+
 	var orijinalTutar int64
 	var pricingTierVersionID, pricingTierID *int64
-	if req.OdemeTipi == "paket" {
-		paketDusulen, err = dusPaketVeHesapla(ctx, tx, customerID, toplamDakika)
-		if err != nil {
-			writeServerError(w, http.StatusInternalServerError, "paket bakiyesi düşülemedi", err)
-			return
-		}
-		if paketDusulen < toplamDakika {
-			writeError(w, http.StatusConflict, "paket bakiyesi bu oturumun tamamını karşılamaya yetmiyor")
-			return
-		}
-	} else {
-		versionID, tierID, tutarKurus, err := tierUcretiniHesapla(ctx, tx, toplamDakika)
+	if ucretlendirilecekDakika > 0 {
+		versionID, tierID, tutarKurus, err := tierUcretiniHesapla(ctx, tx, ucretlendirilecekDakika)
 		if err != nil {
 			writeServerError(w, http.StatusInternalServerError, "Aktif bir fiyat politikası tanımlı değil, lütfen yöneticinize bildirin.", err)
 			return
@@ -204,9 +234,10 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			tahsil_tutar_kurus = $6,
 			odeme_tipi = $7,
 			indirim_kurus = $8,
-			paketten_dusulen_dakika = $9
-		WHERE id = $10`,
-		cikisZamani, pricingTierVersionID, pricingTierID, toplamDakika, orijinalTutar, tahsilTutar, req.OdemeTipi, indirimKurus, paketDusulen, id,
+			paketten_dusulen_dakika = $9,
+			customer_package_id = $10
+		WHERE id = $11`,
+		cikisZamani, pricingTierVersionID, pricingTierID, toplamDakika, orijinalTutar, tahsilTutar, req.OdemeTipi, indirimKurus, paketDusulen, paketID, id,
 	); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "oturum kapatılamadı", err)
 		return
@@ -248,12 +279,10 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" && req.OdemeTipi != "paket" {
-		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit', 'Kredi Kartı' veya 'Paket' olmalıdır.")
-		return
-	}
-	if req.OdemeTipi == "paket" && req.IndirimKurus != 0 {
-		writeError(w, http.StatusBadRequest, "Paket bakiyesinden düşülen bir oturuma indirim uygulanamaz.")
+	// Erken ödeme nakit/kart tahsilatıdır. Paketli müşterilerde hak kullanımı
+	// çıkışta (CloseSession, paket modu) belirlendiği için burada paket seçilemez.
+	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" {
+		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit' veya 'Kredi Kartı' olmalıdır.")
 		return
 	}
 	if req.IndirimKurus < 0 {
@@ -297,25 +326,13 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 	var paketDusulen int64
 	var orijinalTutar int64
 	var pricingTierVersionID, pricingTierID *int64
-	if req.OdemeTipi == "paket" {
-		paketDusulen, err = dusPaketVeHesapla(ctx, tx, customerID, toplamDakika)
-		if err != nil {
-			writeServerError(w, http.StatusInternalServerError, "paket bakiyesi düşülemedi", err)
-			return
-		}
-		if paketDusulen < toplamDakika {
-			writeError(w, http.StatusConflict, "paket bakiyesi bu oturumun tamamını karşılamaya yetmiyor")
-			return
-		}
-	} else {
-		versionID, tierID, tutarKurus, err := tierUcretiniHesapla(ctx, tx, toplamDakika)
-		if err != nil {
-			writeServerError(w, http.StatusInternalServerError, "Aktif bir fiyat politikası tanımlı değil, lütfen yöneticinize bildirin.", err)
-			return
-		}
-		pricingTierVersionID, pricingTierID = &versionID, &tierID
-		orijinalTutar = tutarKurus
+	versionID, tierID, tutarKurus, err := tierUcretiniHesapla(ctx, tx, toplamDakika)
+	if err != nil {
+		writeServerError(w, http.StatusInternalServerError, "Aktif bir fiyat politikası tanımlı değil, lütfen yöneticinize bildirin.", err)
+		return
 	}
+	pricingTierVersionID, pricingTierID = &versionID, &tierID
+	orijinalTutar = tutarKurus
 
 	tahsilTutar := orijinalTutar
 	if req.Yuvarla {

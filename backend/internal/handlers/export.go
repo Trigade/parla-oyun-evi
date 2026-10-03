@@ -132,27 +132,28 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	paketRows, err := a.DB.Query(r.Context(), `
-		SELECT ad, toplam_dakika, kalan_dakika FROM customer_packages
-		WHERE customer_id = $1 AND gecerlilik_bitis > now()
+		SELECT ad, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0), tutar_kurus, gecerlilik_bitis
+		FROM customer_packages
+		WHERE customer_id = $1 AND haftalik_gun IS NOT NULL AND gecerlilik_bitis > now()
 		ORDER BY gecerlilik_bitis ASC`, id,
 	)
 	if err != nil {
-		writeServerError(w, http.StatusInternalServerError, "paket bakiyesi alınamadı", err)
+		writeServerError(w, http.StatusInternalServerError, "paket bilgisi alınamadı", err)
 		return
 	}
 	var paketOzetSatirlari []string
-	var toplamKalanPaketDakika int64
 	for paketRows.Next() {
 		var paketAd string
-		var paketToplamDakika, paketKalanDakika int64
-		if err := paketRows.Scan(&paketAd, &paketToplamDakika, &paketKalanDakika); err != nil {
+		var haftalikGun, gunlukDakika, tutarKurus int64
+		var paketBitis time.Time
+		if err := paketRows.Scan(&paketAd, &haftalikGun, &gunlukDakika, &tutarKurus, &paketBitis); err != nil {
 			paketRows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-		toplamKalanPaketDakika += paketKalanDakika
 		paketOzetSatirlari = append(paketOzetSatirlari,
-			fmt.Sprintf("Paket (%s): Tanımlı %d dk, Kalan %d dk", paketAd, paketToplamDakika, paketKalanDakika))
+			fmt.Sprintf("Paket: %s — haftada %d gün, günde %d dk, %s, bitiş %s",
+				paketAd, haftalikGun, gunlukDakika, formatKurusStr(tutarKurus), paketBitis.Format("02.01.2006")))
 	}
 	paketRows.Close()
 
@@ -207,7 +208,9 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Toplam Harcama: %s", formatKurusStr(toplamKurus)),
 	}
 	summaryLines = append(summaryLines, paketOzetSatirlari...)
-	summaryLines = append(summaryLines, fmt.Sprintf("Toplam Kalan Paket Bakiyesi: %d dk", toplamKalanPaketDakika))
+	if len(paketOzetSatirlari) == 0 {
+		summaryLines = append(summaryLines, "Aktif paket: yok")
+	}
 
 	rapor := pdf.Report{
 		LogoJPEG:     assets.LogoJPEG,
