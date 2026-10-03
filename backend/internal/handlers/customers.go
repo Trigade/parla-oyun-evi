@@ -122,6 +122,90 @@ func (a *API) LookupCustomerByPhone(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"bulundu": true, "musteri": customer})
 }
 
+type createCustomerRequest struct {
+	TCKimlikNo  string `json:"tc_kimlik_no"`
+	Ad          string `json:"ad"`
+	Soyad       string `json:"soyad"`
+	Telefon     string `json:"telefon"`
+	VeliTelefon string `json:"veli_telefon"`
+}
+
+// CreateCustomer, Müşteriler ekranından oturum açmadan yeni müşteri kaydı
+// oluşturur (kasada sıra beklemeden önceden kayıt almak için). Doğrulamalar
+// StartSession ile aynıdır; gün başı şartı aranmaz ve oturum başlatılmaz.
+// Daha önce silinmiş (deleted_at dolu) bir TC kimlik no yeniden kaydedilirse
+// eski kayıt güncel bilgilerle geri getirilir — geçmiş oturumları korunur.
+func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
+	var req createCustomerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
+		return
+	}
+	if req.TCKimlikNo == "" || req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
+		writeError(w, http.StatusBadRequest, "TC kimlik no, ad, soyad ve telefon alanları zorunludur.")
+		return
+	}
+	if !isValidTCKimlikNo(req.TCKimlikNo) {
+		writeError(w, http.StatusBadRequest, "geçersiz TC kimlik no")
+		return
+	}
+	if !adSoyadGecerliMi(req.Ad) || !adSoyadGecerliMi(req.Soyad) {
+		writeError(w, http.StatusBadRequest, "ad/soyad boş olamaz ve en fazla 100 karakter olabilir")
+		return
+	}
+	if !isValidTelefon(req.Telefon) {
+		writeError(w, http.StatusBadRequest, "geçersiz telefon numarası")
+		return
+	}
+	if req.VeliTelefon != "" && !isValidTelefon(req.VeliTelefon) {
+		writeError(w, http.StatusBadRequest, "geçersiz veli telefon numarası")
+		return
+	}
+
+	ctx := r.Context()
+
+	var mevcutID int64
+	if err := a.DB.QueryRow(ctx,
+		`SELECT id FROM customers WHERE tc_kimlik_no = $1 AND deleted_at IS NULL`, req.TCKimlikNo,
+	).Scan(&mevcutID); err == nil {
+		writeError(w, http.StatusConflict, "Bu TC kimlik no ile kayıtlı bir müşteri zaten var.")
+		return
+	}
+
+	var telefonSahibiID int64
+	if err := a.DB.QueryRow(ctx,
+		`SELECT id FROM customers WHERE telefon = $1 AND tc_kimlik_no <> $2 AND deleted_at IS NULL`,
+		req.Telefon, req.TCKimlikNo,
+	).Scan(&telefonSahibiID); err == nil {
+		writeError(w, http.StatusConflict, "bu telefon numarası başka bir müşteriye kayıtlı")
+		return
+	}
+
+	var veliTelefon *string
+	if req.VeliTelefon != "" {
+		veliTelefon = &req.VeliTelefon
+	}
+
+	var customer models.Customer
+	err := a.DB.QueryRow(ctx,
+		`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad,
+			telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
+		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at`,
+		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon,
+	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
+	if err != nil {
+		if pgUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "Bu TC kimlik no veya telefon numarası başka bir müşteriye kayıtlı.")
+			return
+		}
+		writeServerError(w, http.StatusInternalServerError, "müşteri kaydedilemedi", err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, customer)
+}
+
 // StartSession: müşteri kaydı yoksa oluşturur, varsa mevcut kaydı bulur ve
 // yeni bir açık oturum başlatır. Aynı müşterinin zaten açık bir oturumu varsa hata döner.
 func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {

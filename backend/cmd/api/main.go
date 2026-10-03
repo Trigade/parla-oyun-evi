@@ -288,6 +288,7 @@ func main() {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermMusteriler))
 				r.Get("/customers", api.ListCustomers)
+				r.Post("/customers", api.CreateCustomer)
 				r.Patch("/customers/{id}", api.UpdateCustomer)
 				r.Get("/customers/{id}/sessions", api.GetCustomerSessions)
 				r.Get("/customers/{id}/export", api.ExportCustomerPDF)

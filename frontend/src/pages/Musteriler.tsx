@@ -53,6 +53,59 @@ export default function Musteriler() {
   const [silmeOnayGosteriliyor, setSilmeOnayGosteriliyor] = useState(false);
   const isAdmin = getIsAdmin();
 
+  const [yeniFormAcik, setYeniFormAcik] = useState(false);
+  const [yeniAd, setYeniAd] = useState("");
+  const [yeniSoyad, setYeniSoyad] = useState("");
+  const [yeniTc, setYeniTc] = useState("");
+  const [yeniTelefon, setYeniTelefon] = useState("");
+  const [yeniVeliTelefon, setYeniVeliTelefon] = useState("");
+  const [yeniKaydediliyor, setYeniKaydediliyor] = useState(false);
+  const [yeniHata, setYeniHata] = useState<string | null>(null);
+  const [yeniBasari, setYeniBasari] = useState<string | null>(null);
+
+  function yeniFormuSifirla() {
+    setYeniAd("");
+    setYeniSoyad("");
+    setYeniTc("");
+    setYeniTelefon("");
+    setYeniVeliTelefon("");
+    setYeniHata(null);
+  }
+
+  function yeniFormGecerliMi() {
+    return (
+      yeniAd.trim() !== "" &&
+      yeniSoyad.trim() !== "" &&
+      tcKimlikNoGecerliMi(yeniTc) &&
+      telefonGecerliMi(yeniTelefon) &&
+      (yeniVeliTelefon === "" || telefonGecerliMi(yeniVeliTelefon))
+    );
+  }
+
+  // Kasadan giriş yapılmadan, önceden müşteri kaydı oluşturur.
+  async function yeniMusteriKaydet() {
+    setYeniHata(null);
+    setYeniBasari(null);
+    setYeniKaydediliyor(true);
+    try {
+      const kayit = await api.createCustomer(
+        yeniTc.trim(),
+        yeniAd.trim(),
+        yeniSoyad.trim(),
+        yeniTelefon.trim(),
+        yeniVeliTelefon.trim()
+      );
+      setYeniBasari(`${kayit.ad} ${kayit.soyad} kaydedildi.`);
+      yeniFormuSifirla();
+      setYeniFormAcik(false);
+      await refresh();
+    } catch (e) {
+      setYeniHata((e as Error).message);
+    } finally {
+      setYeniKaydediliyor(false);
+    }
+  }
+
   async function refresh() {
     setYukleniyor(true);
     setHata(null);
@@ -188,6 +241,103 @@ export default function Musteriler() {
       </p>
 
       {hata && !seciliMusteri && <div className="alert alert--error">{hata}</div>}
+      {yeniBasari && <div className="alert alert--success">{yeniBasari}</div>}
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ marginBottom: 0 }}>Yeni Müşteri</h2>
+          <button
+            className={yeniFormAcik ? "ghost" : ""}
+            onClick={() => {
+              setYeniBasari(null);
+              if (yeniFormAcik) yeniFormuSifirla();
+              setYeniFormAcik((v) => !v);
+            }}
+          >
+            {yeniFormAcik ? "Vazgeç" : "Yeni Müşteri Ekle"}
+          </button>
+        </div>
+
+        {yeniFormAcik && (
+          <div style={{ marginTop: 16 }}>
+            <p className="muted" style={{ marginBottom: 12 }}>
+              Müşteriyi kasaya girmeden önceden kaydedin. Kayıt sonrası kasa ekranından TC, telefon
+              ya da isimle bulunup giriş yapılabilir.
+            </p>
+            {yeniHata && <div className="alert alert--error">{yeniHata}</div>}
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="yeni-ad">Ad</label>
+                <input id="yeni-ad" placeholder="Ad" value={yeniAd} onChange={(e) => setYeniAd(e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="yeni-soyad">Soyad</label>
+                <input
+                  id="yeni-soyad"
+                  placeholder="Soyad"
+                  value={yeniSoyad}
+                  onChange={(e) => setYeniSoyad(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="yeni-tc">TC Kimlik No</label>
+                <input
+                  id="yeni-tc"
+                  placeholder="12345678901"
+                  value={yeniTc}
+                  inputMode="numeric"
+                  maxLength={11}
+                  onChange={(e) => setYeniTc(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                />
+                {yeniTc.length === 11 && !tcKimlikNoGecerliMi(yeniTc) && (
+                  <p style={{ color: "var(--terracotta-dark)", fontSize: 12, marginTop: 4 }}>
+                    Geçersiz TC Kimlik No
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="yeni-telefon">Telefon</label>
+                <input
+                  id="yeni-telefon"
+                  placeholder="05xxxxxxxxx"
+                  value={yeniTelefon}
+                  inputMode="numeric"
+                  maxLength={11}
+                  onChange={(e) => setYeniTelefon(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                />
+                {yeniTelefon.length > 0 && !telefonGecerliMi(yeniTelefon) && (
+                  <p style={{ color: "var(--terracotta-dark)", fontSize: 12, marginTop: 4 }}>
+                    Geçersiz telefon numarası (10-11 haneli olmalı)
+                  </p>
+                )}
+              </div>
+              <div className="field">
+                <label htmlFor="yeni-veli-telefon">Veli Telefonu (opsiyonel)</label>
+                <input
+                  id="yeni-veli-telefon"
+                  placeholder="05xxxxxxxxx"
+                  value={yeniVeliTelefon}
+                  inputMode="numeric"
+                  maxLength={11}
+                  onChange={(e) => setYeniVeliTelefon(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                />
+                {yeniVeliTelefon.length > 0 && !telefonGecerliMi(yeniVeliTelefon) && (
+                  <p style={{ color: "var(--terracotta-dark)", fontSize: 12, marginTop: 4 }}>
+                    Geçersiz telefon numarası (10-11 haneli olmalı)
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="field-row">
+              <button onClick={yeniMusteriKaydet} disabled={yeniKaydediliyor || !yeniFormGecerliMi()}>
+                {yeniKaydediliyor ? "Kaydediliyor..." : "Kaydet"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="field">

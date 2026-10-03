@@ -227,6 +227,15 @@ export interface CustomerSession {
   paketten_dusulen_dakika: number;
 }
 
+export interface CustomerRecord {
+  id: number;
+  tc_kimlik_no: string;
+  ad: string;
+  soyad: string;
+  telefon: string;
+  veli_telefon?: string;
+}
+
 export interface CustomerLookupResult {
   bulundu: boolean;
   musteri?: {
@@ -418,6 +427,17 @@ export const api = {
     downloadFile(`/reports/export?from=${from}&to=${to}`, `oturumlar_${from}_${to}.pdf`),
   listCustomers: (q: string) =>
     request<CustomerListItem[]>(`/customers?q=${encodeURIComponent(q)}`),
+  createCustomer: (
+    tc_kimlik_no: string,
+    ad: string,
+    soyad: string,
+    telefon: string,
+    veli_telefon: string
+  ) =>
+    request<CustomerRecord>("/customers", {
+      method: "POST",
+      body: JSON.stringify({ tc_kimlik_no, ad, soyad, telefon, veli_telefon }),
+    }),
   updateCustomer: (
     id: number,
     tc_kimlik_no: string,
