@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { api, type StaffUser } from "../api/client";
+import { api, type StaffUser, type TrustedDevice } from "../api/client";
 
 const PERMISSION_LABELS: Record<string, string> = {
   gun_sonu: "Gün Sonu",
@@ -31,6 +31,43 @@ export default function Kullanicilar() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
   const [kaydediliyor, setKaydediliyor] = useState(false);
+
+  // "Bu cihazı hatırla" ile kaydedilmiş cihazlar: hangi cihazların koda
+  // gerek kalmadan giriş yapabildiği burada görülür ve iptal edilebilir.
+  const [cihazlarAcikId, setCihazlarAcikId] = useState<number | null>(null);
+  const [cihazlar, setCihazlar] = useState<TrustedDevice[]>([]);
+  const [cihazlarYukleniyor, setCihazlarYukleniyor] = useState(false);
+
+  async function cihazlariGosterGizle(u: StaffUser) {
+    if (cihazlarAcikId === u.id) {
+      setCihazlarAcikId(null);
+      setCihazlar([]);
+      return;
+    }
+    setCihazlarAcikId(u.id);
+    setCihazlar([]);
+    setCihazlarYukleniyor(true);
+    setHata(null);
+    try {
+      setCihazlar(await api.listUserDevices(u.id));
+    } catch (e) {
+      setHata((e as Error).message);
+    } finally {
+      setCihazlarYukleniyor(false);
+    }
+  }
+
+  async function cihazUnut(userId: number, cihazId: number) {
+    setHata(null);
+    setBasari(null);
+    try {
+      await api.forgetUserDevice(userId, cihazId);
+      setCihazlar((prev) => prev.filter((c) => c.id !== cihazId));
+      setBasari("Cihaz unutuldu; o cihazda bir sonraki girişte kod sorulacak.");
+    } catch (e) {
+      setHata((e as Error).message);
+    }
+  }
 
   async function refresh() {
     setYukleniyor(true);
@@ -247,6 +284,9 @@ export default function Kullanicilar() {
                           {u.totp_enabled && (
                             <>
                               <button className="ghost" onClick={() => totpSifirla(u.id, u.username)}>TOTP Sıfırla</button>{" "}
+                              <button className="ghost" onClick={() => cihazlariGosterGizle(u)}>
+                                {cihazlarAcikId === u.id ? "Cihazları Gizle" : "Cihazlar"}
+                              </button>{" "}
                             </>
                           )}
                           <button className="ghost" onClick={() => hesapSil(u.id, u.username)}>Sil</button>
@@ -254,6 +294,49 @@ export default function Kullanicilar() {
                       )}
                     </td>
                   </tr>
+                  {cihazlarAcikId === u.id && (
+                    <tr>
+                      <td colSpan={5} style={{ background: "var(--cream-soft)" }}>
+                        <strong>Hatırlanan Cihazlar</strong>
+                        <p className="muted" style={{ marginTop: 4 }}>
+                          Bu cihazlarda giriş yapılırken Authenticator kodu sorulmaz; kullanıcı adı ve
+                          şifre yine istenir. "Unut" derseniz o cihazda bir sonraki girişte kod sorulur.
+                        </p>
+                        {cihazlarYukleniyor && <p className="muted">Yükleniyor...</p>}
+                        {!cihazlarYukleniyor && cihazlar.length === 0 && (
+                          <p className="muted">Hatırlanan cihaz yok.</p>
+                        )}
+                        {!cihazlarYukleniyor && cihazlar.length > 0 && (
+                          <table style={{ marginTop: 8 }}>
+                            <thead>
+                              <tr>
+                                <th>Cihaz</th>
+                                <th>Eklendi</th>
+                                <th>Son Kullanım</th>
+                                <th>Geçerlilik Bitişi</th>
+                                <th></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {cihazlar.map((c) => (
+                                <tr key={c.id}>
+                                  <td>{c.cihaz_adi}</td>
+                                  <td>{c.created_at}</td>
+                                  <td>{c.last_used_at ?? "—"}</td>
+                                  <td>{c.expires_at}</td>
+                                  <td>
+                                    <button className="ghost" onClick={() => cihazUnut(u.id, c.id)}>
+                                      Unut
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
                   {editingId === u.id && editForm && (
                     <tr>
                       <td colSpan={5} style={{ background: "var(--cream-soft)" }}>

@@ -25,13 +25,26 @@ export default function Login() {
 
   const [kod, setKod] = useState("");
 
+  // "Bu cihazı hatırla": işaretlenirse bu tarayıcıda 30 gün boyunca
+  // Authenticator kodu sorulmaz. Kullanıcı adı ve şifre yine istenir.
+  const [cihaziHatirla, setCihaziHatirla] = useState(false);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setHata(null);
     setYukleniyor(true);
     try {
       const res = await login(username, password);
-      if (res.totp_setup_required && res.setup_token) {
+      if (res.token && res.user_id != null && res.permissions) {
+        // Bu cihaz daha önce hatırlanmış: sunucu kod adımını atladı.
+        finishLogin({
+          token: res.token,
+          user_id: res.user_id,
+          is_admin: res.is_admin ?? false,
+          permissions: res.permissions,
+        });
+        navigate("/");
+      } else if (res.totp_setup_required && res.setup_token) {
         setSetupToken(res.setup_token);
         const init = await api.totpSetupInit(res.setup_token);
         setManuelSecret(init.secret);
@@ -56,7 +69,7 @@ export default function Login() {
     setHata(null);
     setYukleniyor(true);
     try {
-      const res = await api.totpSetupConfirm(setupToken, kod);
+      const res = await api.totpSetupConfirm(setupToken, kod, cihaziHatirla);
       finishLogin(res);
       navigate("/");
     } catch (err) {
@@ -72,7 +85,7 @@ export default function Login() {
     setHata(null);
     setYukleniyor(true);
     try {
-      const res = await api.totpVerifyLogin(pendingToken, kod);
+      const res = await api.totpVerifyLogin(pendingToken, kod, cihaziHatirla);
       finishLogin(res);
       navigate("/");
     } catch (err) {
@@ -161,6 +174,16 @@ export default function Login() {
                   autoFocus
                 />
               </div>
+              <label
+                style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 400, textAlign: "left" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={cihaziHatirla}
+                  onChange={(e) => setCihaziHatirla(e.target.checked)}
+                />
+                Bu cihazı hatırla (30 gün kod sorulmaz)
+              </label>
               {hata && <div className="alert alert--error">{hata}</div>}
               <button type="submit" disabled={yukleniyor || kod.length !== 6}>
                 {yukleniyor ? "Doğrulanıyor..." : "Kodu Doğrula ve Etkinleştir"}
@@ -187,6 +210,16 @@ export default function Login() {
                   autoFocus
                 />
               </div>
+              <label
+                style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 400, textAlign: "left" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={cihaziHatirla}
+                  onChange={(e) => setCihaziHatirla(e.target.checked)}
+                />
+                Bu cihazı hatırla (30 gün kod sorulmaz)
+              </label>
               {hata && <div className="alert alert--error">{hata}</div>}
               <button type="submit" disabled={yukleniyor || kod.length !== 6}>
                 {yukleniyor ? "Doğrulanıyor..." : "Giriş Yap"}

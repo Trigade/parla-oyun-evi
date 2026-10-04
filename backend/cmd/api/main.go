@@ -310,6 +310,8 @@ func main() {
 				r.Patch("/users/{id}", api.UpdateUser)
 				r.Delete("/users/{id}", api.DeleteUser)
 				r.Post("/users/{id}/totp-reset", api.ResetUserTOTP)
+				r.Get("/users/{id}/devices", api.ListUserDevices)
+				r.Delete("/users/{id}/devices/{cihazId}", api.DeleteUserDevice)
 				r.Delete("/customers/{id}", api.DeleteCustomer)
 				r.Post("/package-definitions", api.CreatePackageDefinition)
 			})

@@ -17,6 +17,9 @@ import (
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// CihazToken, daha önce "Bu cihazı hatırla" denmiş bir tarayıcıdan gelir.
+	// Geçerliyse Authenticator kodu adımı atlanır (şifre yine doğrulanır).
+	CihazToken string `json:"cihaz_token"`
 }
 
 // dummyPasswordHash: kullanıcı adı veritabanında bulunamadığında bile
@@ -102,6 +105,14 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Hatırlanan bir cihazdan geliniyorsa kod sorulmaz: ikinci faktör, bu
+	// cihazda daha önce girilen kodla bir kez doğrulanmıştı ve cihaz anahtarı
+	// hâlâ geçerli (bkz. trusted_devices.go).
+	if a.guvenilenCihazGecerliMi(r.Context(), userID, req.CihazToken) {
+		a.finishLogin(w, r.Context(), userID, "")
+		return
+	}
+
 	pendingToken, err := a.Auth.IssueLimited(userID, auth.PurposeTOTPPending)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Oturum belirteci oluşturulamadı, lütfen tekrar deneyin.")
@@ -130,7 +141,9 @@ func (a *API) totpFlowUser(r *http.Request, wantPurpose string) (*auth.Claims, b
 // finishLogin, TOTP doğrulaması (kurulum ya da giriş) başarıyla tamamlandığında
 // tam yetkili oturum token'ını üretip normal /auth/login yanıtıyla aynı
 // şekilde döner.
-func (a *API) finishLogin(w http.ResponseWriter, ctx context.Context, userID int64) {
+// cihazToken boş değilse ("Bu cihazı hatırla" işaretlenmişse) yanıta eklenir;
+// tarayıcı bunu saklar ve sonraki girişlerde gönderir.
+func (a *API) finishLogin(w http.ResponseWriter, ctx context.Context, userID int64, cihazToken string) {
 	var isAdmin bool
 	var permissions []string
 	if err := a.DB.QueryRow(ctx, `SELECT is_admin, permissions FROM users WHERE id = $1`, userID).
@@ -143,12 +156,16 @@ func (a *API) finishLogin(w http.ResponseWriter, ctx context.Context, userID int
 		writeError(w, http.StatusInternalServerError, "Oturum belirteci oluşturulamadı, lütfen tekrar deneyin.")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	yanit := map[string]any{
 		"token":       token,
 		"user_id":     userID,
 		"is_admin":    isAdmin,
 		"permissions": permissions,
-	})
+	}
+	if cihazToken != "" {
+		yanit["cihaz_token"] = cihazToken
+	}
+	writeJSON(w, http.StatusOK, yanit)
 }
 
 type totpSetupInitResponse struct {
@@ -203,6 +220,22 @@ func (a *API) SetupInitTOTP(w http.ResponseWriter, r *http.Request) {
 
 type totpCodeRequest struct {
 	Code string `json:"code"`
+	// CihaziHatirla true ise bu tarayıcıya bir cihaz anahtarı verilir ve
+	// süresi dolana kadar kod adımı atlanır.
+	CihaziHatirla bool `json:"cihazi_hatirla"`
+}
+
+// cihaziHatirlaIstendiyse, istenmişse cihaz anahtarını üretir. Üretilemezse
+// boş döner: giriş yine tamamlanır, kullanıcı bir dahaki sefere kodu girer.
+func (a *API) cihaziHatirlaIstendiyse(r *http.Request, istendi bool, userID int64) string {
+	if !istendi {
+		return ""
+	}
+	token, err := a.guvenilenCihazKaydet(r.Context(), userID, r.UserAgent())
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 // SetupConfirmTOTP, kullanıcının kimlik doğrulayıcı uygulamadan okuduğu ilk
@@ -247,7 +280,7 @@ func (a *API) SetupConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, http.StatusInternalServerError, "TOTP etkinleştirilemedi", err)
 		return
 	}
-	a.finishLogin(w, r.Context(), claims.UserID)
+	a.finishLogin(w, r.Context(), claims.UserID, a.cihaziHatirlaIstendiyse(r, req.CihaziHatirla, claims.UserID))
 }
 
 // VerifyLoginTOTP, TOTP'si zaten etkin bir kullanıcının girdiği 6 haneli
@@ -285,7 +318,7 @@ func (a *API) VerifyLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		a.LoginLimiter.Basarili("totp:" + ip)
 	}
 
-	a.finishLogin(w, r.Context(), claims.UserID)
+	a.finishLogin(w, r.Context(), claims.UserID, a.cihaziHatirlaIstendiyse(r, req.CihaziHatirla, claims.UserID))
 }
 
 // ResetUserTOTP bir kullanıcının TOTP kaydını siler (telefon kaybı/değişimi
@@ -307,6 +340,12 @@ func (a *API) ResetUserTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "kullanıcı bulunamadı")
+		return
+	}
+	// TOTP sıfırlandığında hatırlanan cihazlar da iptal edilir; aksi halde o
+	// cihazlar kod sorulmadan girmeye devam ederdi.
+	if err := a.guvenilenCihazlariSil(r.Context(), id); err != nil {
+		writeServerError(w, http.StatusInternalServerError, "hatırlanan cihazlar iptal edilemedi", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sifirlandi": true})

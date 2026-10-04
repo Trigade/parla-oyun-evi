@@ -9,6 +9,10 @@ const TOKEN_KEY = "parla_token";
 const IS_ADMIN_KEY = "parla_is_admin";
 const PERMISSIONS_KEY = "parla_permissions";
 const USER_ID_KEY = "parla_user_id";
+// "Bu cihazı hatırla" anahtarı. Oturum kapatınca silinmez: amacı, aynı
+// cihazda tekrar giriş yaparken Authenticator kodunun sorulmamasıdır.
+// Tek başına giriş yapmaya yetmez, şifre yine gerekir.
+const CIHAZ_TOKEN_KEY = "parla_cihaz_token";
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -40,6 +44,14 @@ export function clearSession() {
   localStorage.removeItem(IS_ADMIN_KEY);
   localStorage.removeItem(PERMISSIONS_KEY);
   localStorage.removeItem(USER_ID_KEY);
+}
+
+export function getCihazToken() {
+  return localStorage.getItem(CIHAZ_TOKEN_KEY) ?? "";
+}
+
+function setCihazToken(token: string) {
+  localStorage.setItem(CIHAZ_TOKEN_KEY, token);
 }
 
 // statusMesaji, sunucunun JSON gövdesinde açıklayıcı bir "hata" alanı
@@ -167,6 +179,16 @@ export interface LoginResponse {
   user_id: number;
   is_admin: boolean;
   permissions: string[];
+  // "Bu cihazı hatırla" işaretlendiyse yalnızca bu yanıtta döner.
+  cihaz_token?: string;
+}
+
+export interface TrustedDevice {
+  id: number;
+  cihaz_adi: string;
+  created_at: string;
+  last_used_at?: string;
+  expires_at: string;
 }
 
 // Login artık üç farklı sonuç dönebilir: TOTP hiç kurulmamışsa kurulum
@@ -177,6 +199,11 @@ export interface LoginStepResponse {
   setup_token?: string;
   totp_required?: boolean;
   pending_token?: string;
+  // Cihaz hatırlanmışsa sunucu kod adımını atlar ve doğrudan tam oturum döner.
+  token?: string;
+  user_id?: number;
+  is_admin?: boolean;
+  permissions?: string[];
 }
 
 export interface TotpSetupInit {
@@ -370,26 +397,35 @@ export const api = {
   login: (username: string, password: string) =>
     request<LoginStepResponse>("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, cihaz_token: getCihazToken() }),
     }),
   totpSetupInit: (setupToken: string) =>
     request<TotpSetupInit>("/auth/totp/setup-init", {
       method: "POST",
       headers: { Authorization: `Bearer ${setupToken}` },
     }),
-  totpSetupConfirm: (setupToken: string, code: string) =>
-    request<LoginResponse>("/auth/totp/setup-confirm", {
+  totpSetupConfirm: async (setupToken: string, code: string, cihaziHatirla = false) => {
+    const res = await request<LoginResponse>("/auth/totp/setup-confirm", {
       method: "POST",
       headers: { Authorization: `Bearer ${setupToken}` },
-      body: JSON.stringify({ code }),
-    }),
-  totpVerifyLogin: (pendingToken: string, code: string) =>
-    request<LoginResponse>("/auth/totp/verify-login", {
+      body: JSON.stringify({ code, cihazi_hatirla: cihaziHatirla }),
+    });
+    if (res.cihaz_token) setCihazToken(res.cihaz_token);
+    return res;
+  },
+  totpVerifyLogin: async (pendingToken: string, code: string, cihaziHatirla = false) => {
+    const res = await request<LoginResponse>("/auth/totp/verify-login", {
       method: "POST",
       headers: { Authorization: `Bearer ${pendingToken}` },
-      body: JSON.stringify({ code }),
-    }),
+      body: JSON.stringify({ code, cihazi_hatirla: cihaziHatirla }),
+    });
+    if (res.cihaz_token) setCihazToken(res.cihaz_token);
+    return res;
+  },
   resetUserTotp: (id: number) => request(`/users/${id}/totp-reset`, { method: "POST" }),
+  listUserDevices: (id: number) => request<TrustedDevice[]>(`/users/${id}/devices`),
+  forgetUserDevice: (userId: number, cihazId: number) =>
+    request(`/users/${userId}/devices/${cihazId}`, { method: "DELETE" }),
   lookupCustomerByTC: (tc: string) =>
     request<CustomerLookupResult>(`/customers/by-tc/${encodeURIComponent(tc)}`),
   lookupCustomerByPhone: (telefon: string) =>
