@@ -122,6 +122,38 @@ docker compose -f docker-compose.prod.yml logs backup
 curl http://localhost/api/health     # {"durum":"ok"}
 ```
 
+## 8. Otomatik güncelleme (GitHub + hazır imaj)
+
+Kod GitHub'da özel bir depoda tutulur. `main` dalına her gönderimde GitHub
+uygulamayı derleyip hazır imajı `ghcr.io`'ya yayınlar
+(`.github/workflows/imaj-yayinla.yml`). İş bilgisayarı yalnızca bu imajı
+indirir; o bilgisayarda derleme yapılmaz.
+
+**İş bilgisayarında bir kez yapılacak kurulum:**
+
+1. `ghcr.io` oturumu (yalnızca okuma yetkili bir GitHub token'ı ile):
+   ```powershell
+   docker login ghcr.io -u <github-kullanici-adi>
+   ```
+2. `.env` dosyasına imaj adını ekleyin:
+   ```
+   APP_IMAGE=ghcr.io/<github-kullanici-adi>/parla-oyun-evi:latest
+   ```
+3. Otomatik güncellemeyi kurun (gece görevi + masaüstü kısayolu):
+   ```powershell
+   .\deploy\otomatik-guncelleme-kur.ps1
+   ```
+
+**Bundan sonra:** her gece 03:30'da yeni sürüm kontrol edilir. Yeni sürüm
+yoksa hiçbir şey yapılmaz. Varsa önce yedek alınır, imaj indirilip uygulanır,
+sağlık kontrolü yapılır; başarısız olursa otomatik olarak eski sürüme dönülür.
+Kasada açık oturum varsa gece güncellemesi ertelenir. Elle güncellemek için
+masaüstündeki **Parla Oyun Evi - Güncelle** kısayolu kullanılır.
+
+Kayıtlar: `deploy\guncelleme.log`. Güncelleme komutları `docker-compose.auto.yml`
+dosyasını kullanır; bu dosya `docker-compose.prod.yml` ile aynı proje adını ve
+aynı veritabanı volume'ünü kullandığı için veri taşımaya gerek yoktur.
+
 ## Ortam değişkenleri (app)
 
 | Değişken | Açıklama |
