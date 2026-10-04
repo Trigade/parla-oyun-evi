@@ -72,7 +72,8 @@ Tüm parasal tutarlar **kuruş cinsinden BIGINT** (FLOAT kullanılmıyor).
   (`gun_sonu`, `dashboard`, `musteriler`). `kasa_ekrani` herkese açık.
 - JWT claims: `user_id`, `is_admin`, `permissions`
 - Backend middleware: `auth.RequireAuth`, `auth.RequireAdmin`, `auth.RequirePermission(perm)`
-- Şu anki kullanıcılar: `admin`/`Kaya` (is_admin), `kasiyer1` (permissions: gun_sonu, musteriler)
+- Kullanıcılar ve şifreleri bu dosyada tutulmaz; hesaplar Kullanıcı Yönetimi
+  ekranından (veya ilk kurulumda `cmd/seed`) oluşturulur.
 
 ## 6. Ekranlar ve Akışlar
 

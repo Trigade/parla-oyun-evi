@@ -129,17 +129,23 @@ uygulamayı derleyip hazır imajı `ghcr.io`'ya yayınlar
 (`.github/workflows/imaj-yayinla.yml`). İş bilgisayarı yalnızca bu imajı
 indirir; o bilgisayarda derleme yapılmaz.
 
+**Depo özel, imaj herkese açıktır.** Böylece iş bilgisayarında hiçbir kimlik
+bilgisi (token/şifre) saklanmaz: makine imajı anonim olarak indirir. İmajın
+içinde yalnızca derlenmiş uygulama vardır — müşteri verisi, `.env`, yedekler
+ve belgeler imaja girmez (bkz. `.dockerignore`). Müşteri verisi hiçbir zaman
+GitHub'a gönderilmez; yalnızca iş bilgisayarındaki veritabanında durur.
+
+**GitHub'da bir kez yapılacak:** ilk imaj yayınlandıktan sonra paket
+görünürlüğünü herkese açık yapın — depo sayfası → sağdaki **Packages** →
+`parla-oyun-evi` → **Package settings** → **Change visibility** → **Public**.
+
 **İş bilgisayarında bir kez yapılacak kurulum:**
 
-1. `ghcr.io` oturumu (yalnızca okuma yetkili bir GitHub token'ı ile):
-   ```powershell
-   docker login ghcr.io -u <github-kullanici-adi>
-   ```
-2. `.env` dosyasına imaj adını ekleyin:
+1. `.env` dosyasına imaj adını ekleyin (küçük harf):
    ```
    APP_IMAGE=ghcr.io/<github-kullanici-adi>/parla-oyun-evi:latest
    ```
-3. Otomatik güncellemeyi kurun (gece görevi + masaüstü kısayolu):
+2. Otomatik güncellemeyi kurun (gece görevi + masaüstü kısayolu):
    ```powershell
    .\deploy\otomatik-guncelleme-kur.ps1
    ```
