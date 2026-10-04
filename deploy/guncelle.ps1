@@ -14,7 +14,11 @@
 
 param([switch]$Zorla)
 
-$ErrorActionPreference = "Stop"
+# PowerShell 5.1'de native komutlarin stderr ciktisi "Stop" ile terminating
+# hataya donusur (ornegin ilk calistirmada beklenen "No such image" mesaji
+# script'i durdururdu). Bu yuzden akis exit kodlariyla yonetilir.
+$ErrorActionPreference = "Continue"
+
 $kok = Split-Path -Parent $PSScriptRoot
 Set-Location $kok
 
@@ -23,6 +27,12 @@ function Yaz($mesaj) {
     $satir = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $mesaj
     Write-Host $satir
     Add-Content -Path $logDosyasi -Value $satir -Encoding utf8
+}
+
+# Docker'i calistirir; cikti (hata akisi dahil) yakalanir, karar exit koduna gore verilir.
+function Docker-Calistir([string[]]$arguman) {
+    $cikti = & docker @arguman 2>&1 | Out-String
+    return [pscustomobject]@{ Kod = $LASTEXITCODE; Cikti = $cikti.Trim() }
 }
 
 $compose = @("compose", "-f", "docker-compose.auto.yml")
@@ -39,43 +49,57 @@ $imaj = EnvDeger "APP_IMAGE"
 if (-not $imaj) { Yaz ".env icinde APP_IMAGE tanimli degil, guncelleme iptal."; exit 1 }
 $httpPort = EnvDeger "HTTP_PORT"
 if (-not $httpPort) { $httpPort = "80" }
+$dbKullanici = EnvDeger "POSTGRES_USER"; if (-not $dbKullanici) { $dbKullanici = "parla" }
+$dbAdi = EnvDeger "POSTGRES_DB"; if (-not $dbAdi) { $dbAdi = "parla_oyun_evi" }
 
 # --- 1. Docker hazir mi ---------------------------------------------------
-docker info *> $null
-if ($LASTEXITCODE -ne 0) { Yaz "Docker calismiyor, guncelleme atlandi."; exit 0 }
+if ((Docker-Calistir @("info")).Kod -ne 0) { Yaz "Docker calismiyor, guncelleme atlandi."; exit 0 }
 
 # --- 2. Acik oturum kontrolu ---------------------------------------------
 if (-not $Zorla) {
-    $acik = docker @compose exec -T db psql -U (EnvDeger "POSTGRES_USER") -d (EnvDeger "POSTGRES_DB") -tAc "SELECT count(*) FROM sessions WHERE durum = 'acik'" 2>$null
-    if ($LASTEXITCODE -eq 0 -and "$acik".Trim() -ne "" -and [int]"$acik".Trim() -gt 0) {
-        Yaz "Kasada $("$acik".Trim()) acik oturum var, guncelleme ertelendi."
+    $sorgu = Docker-Calistir ($compose + @("exec", "-T", "db", "psql", "-U", $dbKullanici, "-d", $dbAdi,
+            "-tAc", "SELECT count(*) FROM sessions WHERE durum = 'acik'"))
+    $acikSayisi = 0
+    if ($sorgu.Kod -eq 0 -and [int]::TryParse($sorgu.Cikti, [ref]$acikSayisi) -and $acikSayisi -gt 0) {
+        Yaz "Kasada $acikSayisi acik oturum var, guncelleme ertelendi."
         exit 0
     }
 }
 
 # --- 3. Yeni imaj var mi --------------------------------------------------
-$oncekiId = docker image inspect --format "{{.Id}}" $imaj 2>$null
-docker @compose pull app
-if ($LASTEXITCODE -ne 0) { Yaz "Imaj indirilemedi (internet/oturum sorunu olabilir)."; exit 1 }
-$yeniId = docker image inspect --format "{{.Id}}" $imaj 2>$null
+# Ilk calistirmada imaj henuz indirilmemis olabilir; bu bir hata degildir.
+$onceki = Docker-Calistir @("image", "inspect", "--format", "{{.Id}}", $imaj)
+$oncekiId = if ($onceki.Kod -eq 0) { $onceki.Cikti } else { $null }
 
-if ($oncekiId -and $yeniId -and $oncekiId -eq $yeniId) {
+Yaz "Yeni surum kontrol ediliyor: $imaj"
+$indirme = Docker-Calistir ($compose + @("pull", "app"))
+if ($indirme.Kod -ne 0) {
+    Yaz "Imaj indirilemedi. Internet baglantisini kontrol edin."
+    Yaz $indirme.Cikti
+    exit 1
+}
+
+$yeni = Docker-Calistir @("image", "inspect", "--format", "{{.Id}}", $imaj)
+$yeniId = if ($yeni.Kod -eq 0) { $yeni.Cikti } else { $null }
+if (-not $yeniId) { Yaz "Imaj indirildi ama bulunamadi, guncelleme iptal."; exit 1 }
+
+if ($oncekiId -and $oncekiId -eq $yeniId) {
     Yaz "Yeni surum yok, sistem guncel."
     exit 0
 }
 Yaz "Yeni surum bulundu, guncelleme basliyor."
 
 # --- 4. Yedek -------------------------------------------------------------
-docker @compose exec -T backup /bin/sh /usr/local/bin/parla-backup.sh now
-if ($LASTEXITCODE -ne 0) { Yaz "UYARI: guncelleme oncesi yedek alinamadi." }
+$yedek = Docker-Calistir ($compose + @("exec", "-T", "backup", "/bin/sh", "/usr/local/bin/parla-backup.sh", "now"))
+if ($yedek.Kod -eq 0) { Yaz "Guncelleme oncesi yedek alindi." } else { Yaz "UYARI: yedek alinamadi, guncellemeye devam ediliyor." }
 
 # --- 5. Uygula ------------------------------------------------------------
-docker @compose up -d --wait
-$baslatmaSonucu = $LASTEXITCODE
+$baslat = Docker-Calistir ($compose + @("up", "-d", "--wait"))
+if ($baslat.Kod -ne 0) { Yaz "Konteynerler baslatilamadi:"; Yaz $baslat.Cikti }
 
 # --- 6. Saglik kontrolu ---------------------------------------------------
 $saglikli = $false
-if ($baslatmaSonucu -eq 0) {
+if ($baslat.Kod -eq 0) {
     for ($i = 0; $i -lt 10; $i++) {
         $kod = curl.exe -s -o NUL -m 5 -w "%{http_code}" "http://localhost:$httpPort/api/health"
         if ($kod -eq "200") { $saglikli = $true; break }
@@ -92,8 +116,8 @@ if ($saglikli) {
 Yaz "HATA: yeni surum saglik kontrolunu gecemedi."
 if ($oncekiId) {
     Yaz "Eski surume geri donuluyor."
-    docker tag $oncekiId $imaj
-    docker @compose up -d --wait
+    Docker-Calistir @("tag", $oncekiId, $imaj) | Out-Null
+    Docker-Calistir ($compose + @("up", "-d", "--wait")) | Out-Null
     $kod = curl.exe -s -o NUL -m 5 -w "%{http_code}" "http://localhost:$httpPort/api/health"
     if ($kod -eq "200") { Yaz "Eski surume donuldu, sistem calisiyor." }
     else { Yaz "DIKKAT: sistem ayaga kalkmadi, elle kontrol gerekiyor." }
