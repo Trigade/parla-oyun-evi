@@ -108,6 +108,17 @@ if ($baslat.Kod -eq 0) {
 }
 
 if ($saglikli) {
+    # Saglik kontrolu eski konteyner ayakta kaldiginda da gecer; bu yuzden
+    # calisan konteynerin gercekten yeni imajda oldugu ayrica dogrulanir.
+    $kapId = (Docker-Calistir ($compose + @("ps", "-q", "app"))).Cikti
+    $calisanImaj = if ($kapId) { (Docker-Calistir @("inspect", "--format", "{{.Image}}", $kapId)).Cikti } else { "" }
+    if ($calisanImaj -and $calisanImaj -ne $yeniId) {
+        Yaz "HATA: yeni imaj uygulanamadi, sistem hala eski surumde calisiyor."
+        Yaz "  beklenen: $yeniId"
+        Yaz "  calisan : $calisanImaj"
+        Yaz "  .env icindeki APP_IMAGE degerini ve 'docker compose -f docker-compose.auto.yml config' ciktisini kontrol edin."
+        exit 1
+    }
     Yaz "Guncelleme tamamlandi, sistem calisiyor."
     exit 0
 }
