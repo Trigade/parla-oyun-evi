@@ -12,6 +12,13 @@ function formatKurus(kurus: number) {
   return (kurus / 100).toLocaleString("tr-TR", { style: "currency", currency: "TRY" });
 }
 
+// Paketin hakkını tek satırda anlatır: abonelik "haftada 3 gün · günde 4 saat",
+// saat bakiyeli "10 saat bakiye".
+function hakMetni(p: { tur: string; haftalik_gun: number; gunluk_dakika: number; dakika?: number; toplam_dakika?: number }) {
+  if (p.tur === "bakiye") return `${formatSureMetni(p.dakika ?? p.toplam_dakika ?? 0)} bakiye`;
+  return `haftada ${p.haftalik_gun} gün · günde ${formatSureMetni(p.gunluk_dakika)}`;
+}
+
 function odemeTipiEtiketi(odemeTipi: string) {
   if (odemeTipi === "kredi_karti") return "Kredi Kartı";
   if (odemeTipi === "nakit") return "Nakit";
@@ -37,6 +44,8 @@ export default function SatinAlma() {
   const [hata, setHata] = useState<string | null>(null);
   const [basari, setBasari] = useState<string | null>(null);
 
+  const [yeniTur, setYeniTur] = useState<"abonelik" | "bakiye">("abonelik");
+  const [yeniToplamSaat, setYeniToplamSaat] = useState("10");
   const [yeniPaketAdi, setYeniPaketAdi] = useState("");
   const [yeniGrup, setYeniGrup] = useState("Standart");
   const [yeniHaftalikGun, setYeniHaftalikGun] = useState("3");
@@ -128,16 +137,25 @@ export default function SatinAlma() {
       setPaketTanimHata("Paket adı girin.");
       return;
     }
-    if (!Number.isInteger(haftalikGun) || haftalikGun < 1 || haftalikGun > 7) {
-      setPaketTanimHata("Haftalık gün 1 ile 7 arasında olmalı.");
-      return;
-    }
-    if (!Number.isFinite(gunlukSaat) || gunlukSaat <= 0 || gunlukSaat > 24) {
-      setPaketTanimHata("Günlük süre 0'dan büyük ve en fazla 24 saat olmalı.");
-      return;
+    const bakiyeMi = yeniTur === "bakiye";
+    const toplamSaat = Number(yeniToplamSaat.replace(",", "."));
+    if (bakiyeMi) {
+      if (!Number.isFinite(toplamSaat) || toplamSaat <= 0 || toplamSaat > 1000) {
+        setPaketTanimHata("Süre 0'dan büyük olmalı.");
+        return;
+      }
+    } else {
+      if (!Number.isInteger(haftalikGun) || haftalikGun < 1 || haftalikGun > 7) {
+        setPaketTanimHata("Haftalık gün 1 ile 7 arasında olmalı.");
+        return;
+      }
+      if (!Number.isFinite(gunlukSaat) || gunlukSaat <= 0 || gunlukSaat > 24) {
+        setPaketTanimHata("Günlük süre 0'dan büyük ve en fazla 24 saat olmalı.");
+        return;
+      }
     }
     if (!Number.isFinite(aylikUcret) || aylikUcret < 0) {
-      setPaketTanimHata("Geçerli bir aylık ücret girin.");
+      setPaketTanimHata(bakiyeMi ? "Geçerli bir paket fiyatı girin." : "Geçerli bir aylık ücret girin.");
       return;
     }
     setPaketOlusturuluyor(true);
@@ -145,9 +163,11 @@ export default function SatinAlma() {
       await api.createPackageDefinition(
         yeniPaketAdi.trim(),
         yeniGrup.trim() || "Standart",
-        haftalikGun,
-        Math.round(gunlukSaat * 60),
-        Math.round(aylikUcret * 100)
+        bakiyeMi ? 0 : haftalikGun,
+        bakiyeMi ? 0 : Math.round(gunlukSaat * 60),
+        Math.round(aylikUcret * 100),
+        yeniTur,
+        bakiyeMi ? Math.round(toplamSaat * 60) : 0
       );
       setYeniPaketAdi("");
       setYeniAylikUcret("");
@@ -159,15 +179,17 @@ export default function SatinAlma() {
     }
   }
 
-  const aktifPaket = musteriPaketleri.find((p) => !p.suresi_dolmus_mu) ?? null;
+  // Bakiyesi biten saat bakiyeli paket aktif sayılmaz (sunucudaki mantıkla aynı).
+  const aktifPaket = musteriPaketleri.find((p) => !p.suresi_dolmus_mu && (p.tur !== "bakiye" || (p.kalan_dakika ?? 0) > 0)) ?? null;
 
   return (
     <div className="page page--wide">
       <h1>Satın Alma</h1>
       <p className="muted" style={{ marginBottom: 20 }}>
-        Müşteriye aylık paket tanımlayın. Paket, haftada belirli gün ve günde belirli süre
-        kullanım hakkı verir; ücreti satın alma anında dondurulur ve o günün cirosuna eklenir.
-        Paketli müşteri kasada geldiğinde ücret istenmez, kasiyer "Paketten Düş" ile kapatır.
+        Müşteriye paket tanımlayın. Abonelik paketi haftada belirli gün ve günde belirli süre
+        kullanım hakkı verir; saat bakiyeli paket ise bakiye bitene kadar (1 ay içinde) istenen
+        gün istenen kadar kullanılır ve her kullanımda kalan süre ile değer azalır. Ücret satın
+        alma anında dondurulur ve o günün cirosuna eklenir. Kasiyer "Paketten Düş" ile kapatır.
       </p>
 
       {hata && <div className="alert alert--error">{hata}</div>}
@@ -183,9 +205,9 @@ export default function SatinAlma() {
               <tr>
                 <th>Paket İsmi</th>
                 <th>Yaş / Grup</th>
-                <th>Haftalık Gün</th>
-                <th>Günlük Süre</th>
-                <th>Aylık Ücret</th>
+                <th>Tür</th>
+                <th>Hak</th>
+                <th>Ücret</th>
               </tr>
             </thead>
             <tbody>
@@ -193,9 +215,9 @@ export default function SatinAlma() {
                 <tr key={p.id}>
                   <td style={{ fontWeight: 600 }}>{p.ad}</td>
                   <td>{p.grup}</td>
-                  <td>{p.haftalik_gun} Gün</td>
-                  <td>{formatSureMetni(p.gunluk_dakika)}</td>
-                  <td>{formatKurus(p.aylik_ucret_kurus)}</td>
+                  <td>{p.tur === "bakiye" ? "Saat bakiyeli" : "Abonelik"}</td>
+                  <td>{hakMetni(p)}</td>
+                  <td>{p.tur === "bakiye" ? formatKurus(p.aylik_ucret_kurus) : `${formatKurus(p.aylik_ucret_kurus)} / ay`}</td>
                 </tr>
               ))}
             </tbody>
@@ -244,8 +266,11 @@ export default function SatinAlma() {
                 <span className="muted">Paket bilgisi yükleniyor...</span>
               ) : aktifPaket ? (
                 <span>
-                  Aktif paket: <strong>{aktifPaket.ad}</strong> · haftada {aktifPaket.haftalik_gun} gün ·
-                  günde {formatSureMetni(aktifPaket.gunluk_dakika)} · {aktifPaket.gecerlilik_bitis} tarihine kadar
+                  Aktif paket: <strong>{aktifPaket.ad}</strong> ·{" "}
+                  {aktifPaket.tur === "bakiye"
+                    ? `Kalan: ${formatSureMetni(aktifPaket.kalan_dakika ?? 0)} · ${formatKurus(aktifPaket.kalan_deger_kurus ?? 0)} değerinde`
+                    : hakMetni(aktifPaket)}{" "}
+                  · {aktifPaket.gecerlilik_bitis} tarihine kadar
                 </span>
               ) : (
                 <span className="muted">Aktif paketi yok.</span>
@@ -273,7 +298,11 @@ export default function SatinAlma() {
                   >
                     {paketler.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.ad} ({p.haftalik_gun} gün / {formatSureMetni(p.gunluk_dakika)})
+                        {p.ad} (
+                        {p.tur === "bakiye"
+                          ? `${formatSureMetni(p.dakika ?? 0)} · ${formatKurus(p.aylik_ucret_kurus)}`
+                          : `${p.haftalik_gun} gün / ${formatSureMetni(p.gunluk_dakika)}`}
+                        )
                       </option>
                     ))}
                   </select>
@@ -311,8 +340,8 @@ export default function SatinAlma() {
               <thead>
                 <tr>
                   <th>Paket</th>
-                  <th>Haftalık Gün</th>
-                  <th>Günlük Süre</th>
+                  <th>Hak</th>
+                  <th>Kalan</th>
                   <th>Tutar</th>
                   <th>Ödeme</th>
                   <th>Satın Alma</th>
@@ -324,8 +353,12 @@ export default function SatinAlma() {
                 {musteriPaketleri.map((p) => (
                   <tr key={p.id}>
                     <td>{p.ad}</td>
-                    <td>{p.haftalik_gun} gün</td>
-                    <td>{formatSureMetni(p.gunluk_dakika)}</td>
+                    <td>{hakMetni(p)}</td>
+                    <td>
+                      {p.tur === "bakiye"
+                        ? `${formatSureMetni(p.kalan_dakika ?? 0)} · ${formatKurus(p.kalan_deger_kurus ?? 0)}`
+                        : "—"}
+                    </td>
                     <td>{formatKurus(p.tutar_kurus)}</td>
                     <td>{odemeTipiEtiketi(p.odeme_tipi)}</td>
                     <td>{p.satin_alma_zamani}</td>
@@ -350,6 +383,18 @@ export default function SatinAlma() {
           <h2>Yeni Paket Türü Tanımla</h2>
           <div className="field-row" style={{ alignItems: "flex-end" }}>
             <div className="field">
+              <label htmlFor="yeni-paket-tur">Tür</label>
+              <select
+                id="yeni-paket-tur"
+                value={yeniTur}
+                onChange={(e) => setYeniTur(e.target.value as "abonelik" | "bakiye")}
+                style={{ maxWidth: 160 }}
+              >
+                <option value="abonelik">Abonelik</option>
+                <option value="bakiye">Saat Bakiyeli</option>
+              </select>
+            </div>
+            <div className="field">
               <label htmlFor="yeni-paket-adi">Paket Adı</label>
               <input
                 id="yeni-paket-adi"
@@ -369,6 +414,19 @@ export default function SatinAlma() {
                 style={{ maxWidth: 160 }}
               />
             </div>
+            {yeniTur === "bakiye" ? (
+              <div className="field">
+                <label htmlFor="yeni-paket-toplam-saat">Süre (saat)</label>
+                <input
+                  id="yeni-paket-toplam-saat"
+                  placeholder="Örn: 10"
+                  value={yeniToplamSaat}
+                  onChange={(e) => setYeniToplamSaat(e.target.value)}
+                  style={{ maxWidth: 140 }}
+                />
+              </div>
+            ) : (
+              <>
             <div className="field">
               <label htmlFor="yeni-paket-gun">Haftalık Gün</label>
               <select
@@ -394,8 +452,10 @@ export default function SatinAlma() {
                 style={{ maxWidth: 140 }}
               />
             </div>
+              </>
+            )}
             <div className="field">
-              <label htmlFor="yeni-paket-ucret">Aylık Ücret (TL)</label>
+              <label htmlFor="yeni-paket-ucret">{yeniTur === "bakiye" ? "Paket Fiyatı (TL)" : "Aylık Ücret (TL)"}</label>
               <input
                 id="yeni-paket-ucret"
                 placeholder="Örn: 14000"

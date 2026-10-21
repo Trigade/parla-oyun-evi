@@ -21,14 +21,14 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
     actionTimeout: 10_000,
-    headless: false, // tarayıcı görünür şekilde çalışır (headed) — "npm test" ile de görülebilsin diye
+    headless: process.env.HEADLESS === "1", // varsayılan: tarayıcı görünür (headed); HEADLESS=1 ile headless
     launchOptions: { slowMo: 250 }, // adımların gözle takip edilebilmesi için hafif yavaşlatma
   },
 
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: { ...devices["Desktop Chrome"], channel: process.env.PW_CHANNEL || undefined }, // örn. PW_CHANNEL=msedge
     },
   ],
 

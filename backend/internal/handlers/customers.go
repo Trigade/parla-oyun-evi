@@ -484,8 +484,8 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 			COALESCE(BOOL_OR(s.durum = 'acik'), false),
 			(
 				SELECT cp.ad FROM customer_packages cp
-				WHERE cp.customer_id = c.id AND cp.haftalik_gun IS NOT NULL
-					AND cp.gecerlilik_bitis > now()
+				WHERE cp.customer_id = c.id AND cp.gecerlilik_bitis > now()
+					AND (cp.haftalik_gun IS NOT NULL OR cp.kalan_dakika > 0)
 				ORDER BY cp.satin_alma_zamani DESC LIMIT 1
 			)
 		FROM customers c

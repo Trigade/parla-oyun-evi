@@ -1,8 +1,11 @@
 import * as dotenv from "dotenv";
+import { mkdirSync, writeFileSync } from "fs";
+import { dirname } from "path";
+import { login, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_TOKEN_DOSYASI } from "./api";
 dotenv.config({ quiet: true });
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
-const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:8080/api";
+const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:5173/api";
 
 async function ping(url: string, label: string) {
   try {
@@ -23,4 +26,8 @@ async function ping(url: string, label: string) {
 export default async function globalSetup() {
   await ping(`${API_BASE_URL}/health`, "Backend");
   await ping(BASE_URL, "Frontend");
+  // Admin TOTP girişini (gerekirse adım beklemesiyle) test timeout'u olmayan burada bir kez yap; testler token'ı dosyadan alır.
+  const res = await login(ADMIN_USERNAME, ADMIN_PASSWORD);
+  mkdirSync(dirname(ADMIN_TOKEN_DOSYASI), { recursive: true });
+  writeFileSync(ADMIN_TOKEN_DOSYASI, JSON.stringify(res));
 }

@@ -355,8 +355,11 @@ export interface CurrentBusinessDayResponse {
 
 export interface PackageDefinition {
   id: number;
+  // "bakiye" pakette dakika dolu, haftalik_gun/gunluk_dakika 0; aylik_ucret_kurus paket fiyatıdır.
+  tur: "abonelik" | "bakiye";
   ad: string;
   grup: string;
+  dakika?: number;
   haftalik_gun: number;
   gunluk_dakika: number;
   aylik_ucret_kurus: number;
@@ -365,10 +368,14 @@ export interface PackageDefinition {
 
 export interface CustomerPackage {
   id: number;
+  tur: "abonelik" | "bakiye";
   ad: string;
   grup: string;
   haftalik_gun: number;
   gunluk_dakika: number;
+  toplam_dakika?: number;
+  kalan_dakika?: number;
+  kalan_deger_kurus?: number;
   tutar_kurus: number;
   odeme_tipi: string;
   satin_alma_zamani: string;
@@ -380,6 +387,10 @@ export interface CustomerPackage {
 export interface PackageStatus {
   var: boolean;
   customer_package_id?: number;
+  tur?: "abonelik" | "bakiye";
+  toplam_dakika?: number;
+  kalan_dakika?: number;
+  kalan_deger_kurus?: number;
   ad?: string;
   grup?: string;
   haftalik_gun?: number;
@@ -567,13 +578,17 @@ export const api = {
     grup: string,
     haftalikGun: number,
     gunlukDakika: number,
-    aylikUcretKurus: number
+    aylikUcretKurus: number,
+    tur: "abonelik" | "bakiye" = "abonelik",
+    dakika = 0
   ) =>
     request<PackageDefinition>("/package-definitions", {
       method: "POST",
       body: JSON.stringify({
         ad,
         grup,
+        tur,
+        dakika,
         haftalik_gun: haftalikGun,
         gunluk_dakika: gunlukDakika,
         aylik_ucret_kurus: aylikUcretKurus,

@@ -25,14 +25,14 @@ test.describe("Yetkilendirme / Navigasyon", () => {
       await expect(nav.getByRole("link", { name: "Yönetici Dashboard" })).toHaveCount(0);
       await expect(nav.getByRole("link", { name: "Gün Sonu" })).toHaveCount(0);
       await expect(nav.getByRole("link", { name: "Kullanıcı Yönetimi" })).toHaveCount(0);
-      await expect(nav.getByRole("link", { name: "Fiyat Yönetimi" })).toHaveCount(0);
+      await expect(nav.getByRole("link", { name: "Fiyat Politikası" })).toHaveCount(0);
 
       // izinli sayfa sorunsuz açılır
       await page.goto("/musteriler");
       await expect(page.getByRole("heading", { name: "Müşteriler" })).toBeVisible();
 
       // izinsiz sayfalar erişimi reddeder (yönlendirmez, uyarı gösterir)
-      for (const url of ["/dashboard", "/gun-sonu", "/kullanicilar", "/fiyat-yonetimi"]) {
+      for (const url of ["/dashboard", "/gun-sonu", "/kullanicilar", "/fiyat-politikasi"]) {
         await page.goto(url);
         await expect(page.getByText("Bu sayfaya erişim yetkiniz yok.")).toBeVisible();
       }

@@ -3,23 +3,24 @@ import { ADMIN_USERNAME, ADMIN_PASSWORD } from "../utils/api";
 import * as api from "../utils/api";
 import { genValidTC, genValidPhone } from "../utils/tc";
 import { loginViaStorage, fieldInput } from "../utils/auth";
+import { testMusterileriniSil } from "../utils/db";
 
 // Bu dosyadaki testler, gerçek/paylaşımlı veritabanına karşı çalıştığı
 // için her test kendi benzersiz TC/telefon/ad-soyad'ını üretir ve
 // oluşturduğu açık oturumları (varsa) test sonunda kapatır — mevcut
 // gerçek müşteri/oturum verisine dokunulmaz.
 
-const sessionsToCleanup: number[] = [];
+const musterilerToCleanup: number[] = [];
+const tcToCleanup: string[] = []; // UI'dan kaydedilen müşteriler: id, TC ile afterEach'te çözülür
 
+// Test başarısız olsa da, yalnızca bu testlerin ürettiği müşteriler (oturum/paketleriyle) silinir.
 test.afterEach(async () => {
   const token = await api.adminToken();
-  for (const id of sessionsToCleanup.splice(0)) {
-    try {
-      await api.closeSession(token, id);
-    } catch {
-      // zaten kapatılmış olabilir (test akışının kendisi kapatmış olabilir) — sorun değil
-    }
+  for (const tc of tcToCleanup.splice(0)) {
+    const id = await api.findCustomerIdByTC(token, tc);
+    if (id) musterilerToCleanup.push(id);
   }
+  testMusterileriniSil(musterilerToCleanup.splice(0));
 });
 
 async function gotoKasaEkrani(page: Page) {
@@ -40,6 +41,7 @@ test.describe("Kasa Ekranı — TC ile sorgulama", () => {
       soyad: "Bulunan",
       telefon: genValidPhone(),
     });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoKasaEkrani(page);
@@ -51,11 +53,6 @@ test.describe("Kasa Ekranı — TC ile sorgulama", () => {
 
     await page.getByRole("button", { name: "Giriş Yap" }).click();
     await expect(page.getByRole("cell", { name: `${created.ad} ${created.soyad}` })).toBeVisible();
-
-    // temizlik için oturum id'sini bul
-    const acikOturumlar = await api.listOpenSessions(token);
-    const yeni = acikOturumlar.find((s) => s.customer_id === created.customerId);
-    if (yeni) sessionsToCleanup.push(yeni.id);
   });
 
   test("kayıtsız TC ile sorgulanınca 'kayıt gerekli' formu açılır", async ({ page }) => {
@@ -89,6 +86,7 @@ test.describe("Kasa Ekranı — Telefon ile sorgulama", () => {
       soyad: "Bulunan",
       telefon: genValidPhone(),
     });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoKasaEkrani(page);
@@ -131,6 +129,7 @@ test.describe("Kasa Ekranı — İsim ile Ara", () => {
       soyad: "Kisi",
       telefon: genValidPhone(),
     });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoKasaEkrani(page);
@@ -157,6 +156,7 @@ test.describe("Kasa Ekranı — İsim ile Ara", () => {
       soyad: "Musteri",
       telefon: genValidPhone(),
     });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoKasaEkrani(page);
@@ -169,10 +169,6 @@ test.describe("Kasa Ekranı — İsim ile Ara", () => {
 
     // Sorgu ekranına döner (form sıfırlanır) ve müşteri içeride listesine düşer.
     await expect(page.getByRole("cell", { name: `${benzersizAd} Musteri` })).toBeVisible();
-
-    const acikOturumlar = await api.listOpenSessions(token);
-    const yeni = acikOturumlar.find((s) => s.customer_id === created.customerId);
-    if (yeni) sessionsToCleanup.push(yeni.id);
   });
 
   test("zaten içeride olan müşteri 'İçeride' rozetiyle işaretlenir ve tekrar giriş yapılamaz", async ({ page }) => {
@@ -184,7 +180,7 @@ test.describe("Kasa Ekranı — İsim ile Ara", () => {
       soyad: "Musteri",
       telefon: genValidPhone(),
     });
-    sessionsToCleanup.push(created.sessionId); // içeride bırakılıyor, sonunda temizlenecek
+    musterilerToCleanup.push(created.customerId);
 
     await gotoKasaEkrani(page);
     await page.getByRole("button", { name: "İsim ile Ara" }).click();
@@ -216,6 +212,7 @@ test.describe("Kasa Ekranı — Yeni müşteri kaydı", () => {
   test("tüm alanlar geçerliyken kayıt oluşturulur ve oturum açılır (veli telefonu boş bırakılabilir)", async ({ page }) => {
     await gotoKasaEkrani(page);
     const yeniTC = genValidTC();
+    tcToCleanup.push(yeniTC);
     const yeniTel = genValidPhone();
     const soyad = `Kayit${Date.now()}`;
 
@@ -237,12 +234,6 @@ test.describe("Kasa Ekranı — Yeni müşteri kaydı", () => {
     await page.getByRole("button", { name: "Kaydet ve Giriş Yap" }).click();
 
     await expect(page.getByRole("cell", { name: `Yeni ${soyad}` })).toBeVisible();
-
-    const token = await api.adminToken();
-    const acikOturumlar = await api.listOpenSessions(token);
-    const yeni = acikOturumlar.find((s) => s.ad === "Yeni" && s.soyad === soyad);
-    expect(yeni, "yeni açılan oturum İçeride Olanlar listesinde bulunamadı").toBeTruthy();
-    if (yeni) sessionsToCleanup.push(yeni.id);
   });
 
   test("Vazgeç butonu formu ve sorgu ekranını sıfırlar", async ({ page }) => {
@@ -281,7 +272,7 @@ test.describe("Kasa Ekranı — İçeride Olanlar ve ödeme kapatma", () => {
     const token = await api.adminToken();
     const ad = `PanelTest${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
-    sessionsToCleanup.push(created.sessionId);
+    musterilerToCleanup.push(created.customerId);
 
     await gotoKasaEkrani(page);
     await page.getByRole("cell", { name: `${ad} Musteri` }).click();
@@ -302,7 +293,7 @@ test.describe("Kasa Ekranı — İçeride Olanlar ve ödeme kapatma", () => {
     const token = await api.adminToken();
     const ad = `IndirimTest${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
-    sessionsToCleanup.push(created.sessionId);
+    musterilerToCleanup.push(created.customerId);
 
     await gotoKasaEkrani(page);
     await page.getByRole("cell", { name: `${ad} Musteri` }).click();
@@ -321,6 +312,7 @@ test.describe("Kasa Ekranı — İçeride Olanlar ve ödeme kapatma", () => {
     const token = await api.adminToken();
     const ad = `NakitKapat${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
 
     await gotoKasaEkrani(page);
     await page.getByRole("cell", { name: `${ad} Musteri` }).click();
@@ -336,6 +328,7 @@ test.describe("Kasa Ekranı — İçeride Olanlar ve ödeme kapatma", () => {
     const token = await api.adminToken();
     const ad = `KartKapat${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
 
     await gotoKasaEkrani(page);
     await page.getByRole("cell", { name: `${ad} Musteri` }).click();

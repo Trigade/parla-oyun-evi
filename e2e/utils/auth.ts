@@ -1,5 +1,5 @@
-import { expect, type Page, type Locator } from "@playwright/test";
-import { login as apiLogin } from "./api";
+import { test, expect, type Page, type Locator } from "@playwright/test";
+import { login as apiLogin, totpKodu } from "./api";
 
 /**
  * Uygulamanın form alanlarında `<label>` ile `<input>` çoğu yerde HTML
@@ -26,6 +26,14 @@ export async function loginViaUI(page: Page, username: string, password: string)
   await page.goto("/login");
   await fieldInput(page, "Kullanıcı adı").fill(username);
   await fieldInput(page, "Şifre").fill(password);
+  await page.getByRole("button", { name: "Giriş Yap" }).click();
+}
+
+/** loginViaUI + TOTP kod ekranını E2E_TOTP_SECRET'tan üretilen kodla geçer. */
+export async function loginViaUIWithTotp(page: Page, username: string, password: string) {
+  test.setTimeout(90_000); // TOTP replay koruması: önceki koşunun adımı geçene kadar ~30 sn beklenebilir
+  await loginViaUI(page, username, password);
+  await fieldInput(page, "Doğrulama Kodu").fill(await totpKodu(username));
   await page.getByRole("button", { name: "Giriş Yap" }).click();
 }
 

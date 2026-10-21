@@ -134,9 +134,11 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	paketRows, err := a.DB.Query(r.Context(), `
-		SELECT ad, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0), tutar_kurus, gecerlilik_bitis
+		SELECT ad, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
+			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, gecerlilik_bitis
 		FROM customer_packages
-		WHERE customer_id = $1 AND haftalik_gun IS NOT NULL AND gecerlilik_bitis > now()
+		WHERE customer_id = $1 AND (haftalik_gun IS NOT NULL OR toplam_dakika IS NOT NULL)
+			AND gecerlilik_bitis > now()
 		ORDER BY gecerlilik_bitis ASC`, id,
 	)
 	if err != nil {
@@ -146,12 +148,19 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	var paketOzetSatirlari []string
 	for paketRows.Next() {
 		var paketAd string
-		var haftalikGun, gunlukDakika, tutarKurus int64
+		var haftalikGun, gunlukDakika, toplamDakika, kalanDakika, tutarKurus int64
 		var paketBitis time.Time
-		if err := paketRows.Scan(&paketAd, &haftalikGun, &gunlukDakika, &tutarKurus, &paketBitis); err != nil {
+		if err := paketRows.Scan(&paketAd, &haftalikGun, &gunlukDakika, &toplamDakika, &kalanDakika, &tutarKurus, &paketBitis); err != nil {
 			paketRows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
+		}
+		if haftalikGun == 0 { // saat bakiyeli paket
+			paketOzetSatirlari = append(paketOzetSatirlari,
+				fmt.Sprintf("Paket: %s — kalan %d/%d dk (%s değerinde), bitiş %s",
+					paketAd, kalanDakika, toplamDakika, formatKurusStr(kalanDegerKurus(tutarKurus, toplamDakika, kalanDakika)),
+					paketBitis.Format("02.01.2006")))
+			continue
 		}
 		paketOzetSatirlari = append(paketOzetSatirlari,
 			fmt.Sprintf("Paket: %s — haftada %d gün, günde %d dk, %s, bitiş %s",
@@ -262,8 +271,11 @@ func odemeTipiEtiketStr(tip *string) string {
 	if tip == nil {
 		return "—"
 	}
-	if *tip == "kredi_karti" {
+	switch *tip {
+	case "kredi_karti":
 		return "Kredi Kartı"
+	case "paket":
+		return "Paket"
 	}
 	return "Nakit"
 }

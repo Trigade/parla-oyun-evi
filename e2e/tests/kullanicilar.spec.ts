@@ -22,17 +22,19 @@ test.describe("Kullanıcı Yönetimi — Oluşturma", () => {
     const username = genUsername("olustur");
     await gotoKullanicilar(page);
 
-    await fieldInput(page, "Kullanıcı Adı").fill(username);
-    await fieldInput(page, "Şifre (en az 6 karakter)").fill("GecerliSifre123");
-    await page.getByLabel("Müşteriler").check();
-    await page.getByRole("button", { name: "Hesap Oluştur" }).click();
+    try {
+      await fieldInput(page, "Kullanıcı Adı").fill(username);
+      await fieldInput(page, "Şifre (en az 6 karakter)").fill("GecerliSifre123");
+      await page.getByLabel("Müşteriler").check();
+      await page.getByRole("button", { name: "Hesap Oluştur" }).click();
 
-    await expect(page.getByText(`"${username}" hesabı oluşturuldu.`)).toBeVisible();
-    await expect(page.getByRole("cell", { name: username })).toBeVisible();
-
-    // temizlik
-    const token = await api.adminToken();
-    await api.deleteUserByUsername(token, username);
+      await expect(page.getByText(`"${username}" hesabı oluşturuldu.`)).toBeVisible();
+      await expect(page.getByRole("cell", { name: username })).toBeVisible();
+    } finally {
+      // temizlik (assertion düşse de çalışır)
+      const token = await api.adminToken();
+      await api.deleteUserByUsername(token, username);
+    }
   });
 });
 

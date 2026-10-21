@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
+import { SURUM } from "../surum";
 
 type Asama = "girdi" | "totp_kurulum" | "totp_dogrulama";
 
@@ -228,6 +229,8 @@ export default function Login() {
             </form>
           </>
         )}
+
+        <p className="muted" style={{ marginTop: 16, fontSize: 11, opacity: 0.7 }}>{SURUM}</p>
       </div>
     </div>
   );

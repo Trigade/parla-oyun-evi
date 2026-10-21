@@ -3,17 +3,19 @@ import { ADMIN_USERNAME, ADMIN_PASSWORD } from "../utils/api";
 import * as api from "../utils/api";
 import { genValidTC, genValidPhone } from "../utils/tc";
 import { loginViaStorage } from "../utils/auth";
+import { testMusterileriniSil } from "../utils/db";
 
-const sessionsToCleanup: number[] = [];
+const tcToCleanup: string[] = []; // UI'dan kaydedilen müşteriler: id, TC ile afterEach'te çözülür
+
+// Test başarısız olsa da, yalnızca bu testlerin ürettiği müşteriler (oturum/paketleriyle) silinir.
 test.afterEach(async () => {
   const token = await api.adminToken();
-  for (const id of sessionsToCleanup.splice(0)) {
-    try {
-      await api.closeSession(token, id);
-    } catch {
-      // zaten kapalı olabilir
-    }
+  const ids: number[] = [];
+  for (const tc of tcToCleanup.splice(0)) {
+    const id = await api.findCustomerIdByTC(token, tc);
+    if (id) ids.push(id);
   }
+  testMusterileriniSil(ids);
 });
 
 test.describe("Genel / Edge Case'ler", () => {
@@ -24,6 +26,7 @@ test.describe("Genel / Edge Case'ler", () => {
     await page.goto("/");
 
     const tc = genValidTC();
+    tcToCleanup.push(tc);
     const soyad = `Öztürk-Çağlış${Date.now()}`;
     await page.getByPlaceholder("12345678901").fill(tc);
     await page.getByRole("button", { name: "Sorgula" }).click();
@@ -39,10 +42,6 @@ test.describe("Genel / Edge Case'ler", () => {
     await page.getByRole("button", { name: "Kaydet ve Giriş Yap" }).click();
 
     await expect(page.getByRole("cell", { name: `Şükrü İğde ${soyad}` })).toBeVisible();
-
-    const acikOturumlar = await api.listOpenSessions(token);
-    const yeni = acikOturumlar.find((s) => s.soyad === soyad);
-    if (yeni) sessionsToCleanup.push(yeni.id);
   });
 
   test("101 karakterlik ad backend tarafından reddedilir (100 karakter sınırı)", async ({ page }) => {
@@ -52,6 +51,7 @@ test.describe("Genel / Edge Case'ler", () => {
     await page.goto("/");
 
     const tc = genValidTC();
+    tcToCleanup.push(tc); // reddedilmesi beklenir; yine de kayıt sızarsa temizlensin
     await page.getByPlaceholder("12345678901").fill(tc);
     await page.getByRole("button", { name: "Sorgula" }).click();
     await expect(page.getByText("ile kayıtlı müşteri bulunamadı")).toBeVisible();

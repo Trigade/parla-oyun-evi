@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { ADMIN_USERNAME, ADMIN_PASSWORD } from "../utils/api";
-import { loginViaUI, expectLoggedIn } from "../utils/auth";
+import { loginViaUI, loginViaUIWithTotp, expectLoggedIn } from "../utils/auth";
 
 test.describe("Kimlik Doğrulama", () => {
   test("doğru kullanıcı adı/şifre ile giriş yapar ve Kasa Ekranı'na yönlendirir", async ({ page }) => {
-    await loginViaUI(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+    await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
     await expect(page).toHaveURL("/");
     await expect(page.getByRole("heading", { name: "Kasa Ekranı" })).toBeVisible();
     await expectLoggedIn(page);
@@ -34,7 +34,7 @@ test.describe("Kimlik Doğrulama", () => {
   });
 
   test("başarılı girişten sonra sayfa yenilenince oturum korunur", async ({ page }) => {
-    await loginViaUI(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+    await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
     await expectLoggedIn(page);
     await page.reload();
     await expectLoggedIn(page);
@@ -42,7 +42,7 @@ test.describe("Kimlik Doğrulama", () => {
   });
 
   test("Çıkış Yap, oturumu kapatır ve korumalı sayfaya tekrar erişimi engeller", async ({ page }) => {
-    await loginViaUI(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+    await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
     await expectLoggedIn(page);
     await page.getByRole("button", { name: "Çıkış Yap" }).click();
     await expect(page).toHaveURL(/\/login$/);

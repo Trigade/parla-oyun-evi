@@ -10,6 +10,7 @@ import SatinAlma from "./pages/SatinAlma";
 import Kullanicilar from "./pages/Kullanicilar";
 import FiyatPolitikasi from "./pages/FiyatPolitikasi";
 import Login from "./pages/Login";
+import { SURUM } from "./surum";
 
 function NavLink({ to, children }: { to: string; children: ReactNode }) {
   const location = useLocation();
@@ -30,7 +31,7 @@ function Nav() {
         <img src="/logo.jpeg" alt="Parla Oyun Evi" className="topnav__logo" />
         <span className="topnav__title">
           Parla Oyun Evi
-          <small>Süre Takip &amp; Adisyon</small>
+          <small>Süre Takip &amp; Adisyon · {SURUM}</small>
         </span>
       </Link>
       <NavLink to="/">Kasa Ekranı</NavLink>

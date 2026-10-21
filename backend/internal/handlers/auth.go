@@ -205,7 +205,7 @@ func (a *API) SetupInitTOTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := a.DB.Exec(r.Context(),
-			`UPDATE users SET totp_secret = $1 WHERE id = $2`, secret, claims.UserID,
+			`UPDATE users SET totp_secret = $1, totp_son_adim = NULL WHERE id = $2`, secret, claims.UserID,
 		); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "TOTP sırrı kaydedilemedi", err)
 			return
@@ -238,6 +238,20 @@ func (a *API) cihaziHatirlaIstendiyse(r *http.Request, istendi bool, userID int6
 	return token
 }
 
+// totpKodDogru kodu doğrular ve eşleşen zaman adımını atomik olarak "kullanıldı"
+// işaretler; aynı (veya daha eski) adım ikinci kez kabul edilmez (replay).
+func (a *API) totpKodDogru(ctx context.Context, userID int64, secret, code string) bool {
+	adim, ok := auth.VerifyTOTPCode(secret, code)
+	if !ok {
+		return false
+	}
+	tag, err := a.DB.Exec(ctx,
+		`UPDATE users SET totp_son_adim = $1 WHERE id = $2 AND (totp_son_adim IS NULL OR totp_son_adim < $1)`,
+		adim, userID,
+	)
+	return err == nil && tag.RowsAffected() == 1
+}
+
 // SetupConfirmTOTP, kullanıcının kimlik doğrulayıcı uygulamadan okuduğu ilk
 // kodu doğrular; doğruysa TOTP kalıcı olarak etkinleşir ve tam oturum
 // token'ı verilerek giriş tamamlanır.
@@ -266,7 +280,7 @@ func (a *API) SetupConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "önce QR kodu okutup kurulumu başlatın")
 		return
 	}
-	if !auth.VerifyTOTPCode(*secret, req.Code) {
+	if !a.totpKodDogru(r.Context(), claims.UserID, *secret, req.Code) {
 		writeError(w, http.StatusUnauthorized, "kod hatalı veya süresi dolmuş")
 		return
 	}
@@ -310,7 +324,7 @@ func (a *API) VerifyLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "TOTP kurulumu eksik, lütfen yöneticinize bildirin")
 		return
 	}
-	if !auth.VerifyTOTPCode(*secret, req.Code) {
+	if !a.totpKodDogru(r.Context(), claims.UserID, *secret, req.Code) {
 		writeError(w, http.StatusUnauthorized, "kod hatalı veya süresi dolmuş")
 		return
 	}
@@ -332,7 +346,7 @@ func (a *API) ResetUserTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag, err := a.DB.Exec(r.Context(),
-		`UPDATE users SET totp_secret = NULL, totp_enabled = false WHERE id = $1`, id,
+		`UPDATE users SET totp_secret = NULL, totp_enabled = false, totp_son_adim = NULL WHERE id = $1`, id,
 	)
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "TOTP sıfırlanamadı", err)

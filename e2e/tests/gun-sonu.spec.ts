@@ -2,18 +2,14 @@ import { test, expect, type Page } from "@playwright/test";
 import { ADMIN_USERNAME, ADMIN_PASSWORD } from "../utils/api";
 import * as api from "../utils/api";
 import { genValidTC, genValidPhone } from "../utils/tc";
+import { oturumGirisiniGeriCek, testMusterileriniSil } from "../utils/db";
 import { loginViaStorage } from "../utils/auth";
 
-const sessionsToCleanup: number[] = [];
-test.afterEach(async () => {
-  const token = await api.adminToken();
-  for (const id of sessionsToCleanup.splice(0)) {
-    try {
-      await api.closeSession(token, id);
-    } catch {
-      // zaten kapalı olabilir
-    }
-  }
+const musterilerToCleanup: number[] = [];
+
+// Test başarısız olsa da, yalnızca bu testlerin ürettiği müşteriler (oturum/paketleriyle) silinir.
+test.afterEach(() => {
+  testMusterileriniSil(musterilerToCleanup.splice(0));
 });
 
 async function gotoGunSonu(page: Page) {
@@ -48,7 +44,7 @@ test.describe("Gün Sonu — Açık oturum yönetimi", () => {
       soyad: "Musteri",
       telefon: genValidPhone(),
     });
-    sessionsToCleanup.push(created.sessionId);
+    musterilerToCleanup.push(created.customerId);
 
     await gotoGunSonu(page);
     await expect(page.getByText(/açık oturum var — gün sonu yapmadan önce hepsini kapatın/)).toBeVisible();
@@ -59,6 +55,7 @@ test.describe("Gün Sonu — Açık oturum yönetimi", () => {
     const token = await api.adminToken();
     const ad = `GunSonuNakit${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
 
     await gotoGunSonu(page);
     const satir = page.locator("tbody tr", { hasText: `${ad} Musteri` });
@@ -75,15 +72,17 @@ test.describe("Gün Sonu — Açık oturum yönetimi", () => {
     const token = await api.adminToken();
     const ad = `ElleKapat${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
 
     await gotoGunSonu(page);
     const satir = page.locator("tbody tr", { hasText: `${ad} Musteri` });
     await expect(satir).toBeVisible();
     await satir.getByRole("button", { name: "Elle Kapat" }).click();
 
-    // Giriş anıyla aynı dakikaya denk gelip "çıkış girişten önce olamaz" hatasını
-    // tetiklememek için bilerek birkaç dakika ileri bir çıkış zamanı giriliyor.
-    const ileriZaman = new Date(Date.now() + 5 * 60 * 1000);
+    // Backend ileri tarihli çıkışı reddeder; giriş dakika altı farkla kalmasın diye
+    // test oturumunun girişi geriye çekilip çıkış olarak "şimdi" girilir.
+    oturumGirisiniGeriCek(created.sessionId, 10);
+    const ileriZaman = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const deger = `${ileriZaman.getFullYear()}-${pad(ileriZaman.getMonth() + 1)}-${pad(ileriZaman.getDate())}T${pad(
       ileriZaman.getHours()
@@ -106,7 +105,7 @@ test.describe("Gün Sonu — Tam gün sonu akışı", () => {
     // Bu yüzden varsayılan olarak ATLANIR; bilinçli olarak çalıştırmak isteyen kişi
     // RUN_DESTRUCTIVE_TESTS=1 ortam değişkenini ayarlamalıdır (bkz. .env.example).
     test.skip(
-      !process.env.RUN_DESTRUCTIVE_TESTS,
+      process.env.RUN_DESTRUCTIVE_TESTS !== "1",
       "Gerçek iş gününü sonlandıran yıkıcı bir test; sadece RUN_DESTRUCTIVE_TESTS=1 ile çalışır."
     );
 
@@ -125,6 +124,7 @@ test.describe("Gün Sonu — Tam gün sonu akışı", () => {
       soyad: "Musteri",
       telefon: genValidPhone(),
     });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoGunSonu(page);
