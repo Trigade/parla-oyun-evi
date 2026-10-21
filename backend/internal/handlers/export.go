@@ -43,8 +43,10 @@ func (a *API) ExportSessionsPDF(w http.ResponseWriter, r *http.Request) {
 			s.indirim_kurus, s.tahsil_tutar_kurus, s.odeme_tipi, s.manuel_kapatildi
 		FROM sessions s
 		JOIN customers c ON c.id = s.customer_id
-		WHERE s.durum = 'kapali' AND s.cikis_zamani >= $1 AND s.cikis_zamani < $2
-		ORDER BY s.cikis_zamani ASC`,
+		WHERE (s.durum = 'kapali' OR s.on_odeme_yapildi_mi)
+		  AND COALESCE(s.on_odeme_zamani, s.cikis_zamani) >= $1
+		  AND COALESCE(s.on_odeme_zamani, s.cikis_zamani) < $2
+		ORDER BY COALESCE(s.on_odeme_zamani, s.cikis_zamani) ASC`,
 		from, toExclusive,
 	)
 	if err != nil {

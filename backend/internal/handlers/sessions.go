@@ -563,8 +563,18 @@ func (a *API) ManualCloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
 	}
+	if req.CikisZamani.IsZero() {
+		writeError(w, http.StatusBadRequest, "Çıkış zamanı gerekli.")
+		return
+	}
 	if req.CikisZamani.Before(girisZamani) {
 		writeError(w, http.StatusBadRequest, "çıkış zamanı giriş zamanından önce olamaz")
+		return
+	}
+	// Gelecek tarihli çıkış tutarı şişirir ve oturumu gün sonu raporunun
+	// aralığı dışında bırakır; 1 dk saat kayması toleransı tanınır.
+	if req.CikisZamani.After(time.Now().Add(time.Minute)) {
+		writeError(w, http.StatusBadRequest, "Çıkış zamanı ileri bir tarih olamaz.")
 		return
 	}
 
