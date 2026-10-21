@@ -62,7 +62,9 @@ func (a *API) GetReport(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(tahsil_tutar_kurus) FILTER (WHERE odeme_tipi = 'kredi_karti'), 0),
 			COUNT(*) FILTER (WHERE odeme_tipi = 'kredi_karti')
 		FROM sessions
-		WHERE durum = 'kapali' AND cikis_zamani >= $1 AND cikis_zamani < $2`,
+		WHERE (durum = 'kapali' OR on_odeme_yapildi_mi)
+		  AND COALESCE(on_odeme_zamani, cikis_zamani) >= $1
+		  AND COALESCE(on_odeme_zamani, cikis_zamani) < $2`,
 		from, toExclusive,
 	).Scan(
 		&resp.ToplamCiroKurus, &resp.OturumSayisi,
@@ -105,10 +107,12 @@ func (a *API) GetReport(w http.ResponseWriter, r *http.Request) {
 
 	gunler := map[string]*dailyBreakdown{}
 	rows, err := a.DB.Query(ctx, `
-		SELECT date(cikis_zamani AT TIME ZONE 'Europe/Istanbul') AS gun,
+		SELECT date(COALESCE(on_odeme_zamani, cikis_zamani) AT TIME ZONE 'Europe/Istanbul') AS gun,
 			COALESCE(SUM(tahsil_tutar_kurus), 0), COUNT(*)
 		FROM sessions
-		WHERE durum = 'kapali' AND cikis_zamani >= $1 AND cikis_zamani < $2
+		WHERE (durum = 'kapali' OR on_odeme_yapildi_mi)
+		  AND COALESCE(on_odeme_zamani, cikis_zamani) >= $1
+		  AND COALESCE(on_odeme_zamani, cikis_zamani) < $2
 		GROUP BY gun
 		ORDER BY gun ASC`,
 		from, toExclusive,

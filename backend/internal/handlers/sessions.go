@@ -188,7 +188,30 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		paketID = &durum.CustomerPackageID
-		if req.PaketModu == "ucretsiz" {
+		if durum.Tur == "bakiye" {
+			// Eşzamanlı iki kapatma bakiyeyi eksiye düşürmesin diye satır kilitlenir
+			// ve kalan bakiye kilit altında yeniden okunur.
+			if err := tx.QueryRow(ctx,
+				`SELECT kalan_dakika FROM customer_packages WHERE id = $1 FOR UPDATE`, durum.CustomerPackageID,
+			).Scan(&durum.KalanDakika); err != nil {
+				writeServerError(w, http.StatusInternalServerError, "paket bakiyesi alınamadı", err)
+				return
+			}
+			var asiyor bool
+			paketDusulen, ucretlendirilecekDakika, asiyor = bakiyedenDus(toplamDakika, durum.KalanDakika)
+			if asiyor && req.PaketModu == "ucretsiz" {
+				writeError(w, http.StatusConflict, "Oturum süresi paketin kalan bakiyesini aşıyor. Aşan kısmı tahsil etmek için 'Aşanı Tahsil Et' seçeneğini kullanın.")
+				return
+			}
+			if paketDusulen > 0 {
+				if _, err := tx.Exec(ctx,
+					`UPDATE customer_packages SET kalan_dakika = kalan_dakika - $1 WHERE id = $2`,
+					paketDusulen, durum.CustomerPackageID); err != nil {
+					writeServerError(w, http.StatusInternalServerError, "paket bakiyesi güncellenemedi", err)
+					return
+				}
+			}
+		} else if req.PaketModu == "ucretsiz" {
 			paketDusulen = toplamDakika
 			ucretlendirilecekDakika = 0
 		} else {
@@ -563,8 +586,18 @@ func (a *API) ManualCloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
 	}
+	if req.CikisZamani.IsZero() {
+		writeError(w, http.StatusBadRequest, "Çıkış zamanı gerekli.")
+		return
+	}
 	if req.CikisZamani.Before(girisZamani) {
 		writeError(w, http.StatusBadRequest, "çıkış zamanı giriş zamanından önce olamaz")
+		return
+	}
+	// Gelecek tarihli çıkış tutarı şişirir ve oturumu gün sonu raporunun
+	// aralığı dışında bırakır; 1 dk saat kayması toleransı tanınır.
+	if req.CikisZamani.After(time.Now().Add(time.Minute)) {
+		writeError(w, http.StatusBadRequest, "Çıkış zamanı ileri bir tarih olamaz.")
 		return
 	}
 

@@ -12,10 +12,10 @@ export default defineConfig({
     // yoluyla çağırıyor (bkz. src/api/client.ts); bu proxy isteği gerçek
     // backend'e (localhost:8080) yönlendirir. Böylece ngrok gibi tek portu
     // tünelleyen bir HTTPS erişimde de ayrı bir backend tüneline gerek kalmaz
-    // ve mixed-content/CORS sorunu yaşanmaz.
+    // ve mixed-content/CORS sorunu yaşanmaz. Hedef API_PROXY_TARGET ile değiştirilebilir.
     proxy: {
       "/api": {
-        target: "http://localhost:8080",
+        target: process.env.API_PROXY_TARGET ?? "http://localhost:8080",
         changeOrigin: true,
       },
     },

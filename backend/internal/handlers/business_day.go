@@ -285,11 +285,6 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	}
 	paketRows.Close()
 
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "İşlem tamamlanamadı, lütfen tekrar deneyin.")
-		return
-	}
-
 	ozet := []string{
 		fmt.Sprintf("Gün Başı: %s", acilisZamani.Format("02.01.2006 15:04")),
 		fmt.Sprintf("Gün Sonu: %s", kapanisZamani.Format("02.01.2006 15:04")),
@@ -323,6 +318,12 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	docBytes, err := pdf.Build(rapor)
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "rapor oluşturulamadı", err)
+		return
+	}
+
+	// PDF hazır olmadan gün kalıcı kapanmaz: üretim hatasında tx geri alınır.
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "İşlem tamamlanamadı, lütfen tekrar deneyin.")
 		return
 	}
 

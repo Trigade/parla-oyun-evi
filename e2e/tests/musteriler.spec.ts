@@ -3,6 +3,14 @@ import { ADMIN_USERNAME, ADMIN_PASSWORD } from "../utils/api";
 import * as api from "../utils/api";
 import { genValidTC, genValidPhone } from "../utils/tc";
 import { loginViaStorage, fieldInput } from "../utils/auth";
+import { testMusterileriniSil } from "../utils/db";
+
+const musterilerToCleanup: number[] = [];
+
+// Test başarısız olsa da, yalnızca bu testlerin ürettiği müşteriler silinir.
+test.afterEach(() => {
+  testMusterileriniSil(musterilerToCleanup.splice(0));
+});
 
 async function gotoMusteriler(page: Page) {
   await loginViaStorage(page, ADMIN_USERNAME, ADMIN_PASSWORD);
@@ -25,6 +33,7 @@ test.describe("Müşteriler — Liste ve Arama", () => {
     const token = await api.adminToken();
     const ad = `AramaFiltre${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Kisi", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoMusteriler(page);
@@ -44,6 +53,7 @@ test.describe("Müşteriler — Geçmiş popup'ı", () => {
     const token = await api.adminToken();
     const ad = `PopupTest${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoMusteriler(page);
@@ -78,6 +88,7 @@ test.describe("Müşteriler — Düzenleme", () => {
     const token = await api.adminToken();
     const ad = `DuzenleTest${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoMusteriler(page);
@@ -98,6 +109,7 @@ test.describe("Müşteriler — Düzenleme", () => {
     const token = await api.adminToken();
     const ad = `KayitGuncelle${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Eski", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoMusteriler(page);
@@ -118,6 +130,7 @@ test.describe("Müşteriler — Düzenleme", () => {
     const token = await api.adminToken();
     const ad = `IptalTest${Date.now()}`;
     const created = await api.createCheckedInTestCustomer(token, { tc: genValidTC(), ad, soyad: "Musteri", telefon: genValidPhone() });
+    musterilerToCleanup.push(created.customerId);
     await api.closeSession(token, created.sessionId);
 
     await gotoMusteriler(page);

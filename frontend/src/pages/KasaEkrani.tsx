@@ -401,6 +401,7 @@ export default function KasaEkrani() {
   const paketVar = paketDurumu?.var === true;
   const paketKalanGunlukDakika = paketDurumu?.kalan_gunluk_dakika ?? 0;
   const paketAsanDakika = paketVar ? Math.max(0, canliDakika - paketKalanGunlukDakika) : 0;
+  const bakiyePaketi = paketDurumu?.tur === "bakiye";
   const paketAsanTutar = paketAsanDakika > 0 ? tierUcretiHesapla(paketAsanDakika, pricingPolicy) : null;
 
   const tahminiTutarHam = tierUcretiHesapla(canliDakika, pricingPolicy);
@@ -794,11 +795,19 @@ export default function KasaEkrani() {
                     {paketDurumu?.ad}
                     {paketDurumu?.grup ? ` · ${paketDurumu.grup}` : ""}
                   </div>
-                  <div>
-                    Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün ·
-                    Bugün kalan hak: {formatSureMetni(paketKalanGunlukDakika)} ·
-                    Geçerlilik: {paketDurumu?.gecerlilik_bitis}
-                  </div>
+                  {bakiyePaketi ? (
+                    <div>
+                      Kalan bakiye: {formatSureMetni(paketDurumu?.kalan_dakika ?? 0)} (
+                      {formatKurus(paketDurumu?.kalan_deger_kurus ?? 0)} değerinde) / toplam{" "}
+                      {formatSureMetni(paketDurumu?.toplam_dakika ?? 0)} · Geçerlilik: {paketDurumu?.gecerlilik_bitis}
+                    </div>
+                  ) : (
+                    <div>
+                      Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün ·
+                      Bugün kalan hak: {formatSureMetni(paketKalanGunlukDakika)} ·
+                      Geçerlilik: {paketDurumu?.gecerlilik_bitis}
+                    </div>
+                  )}
                   {paketDurumu?.gun_hakki_doldu_mu && (
                     <div style={{ color: "var(--terracotta-dark)", fontWeight: 600, marginTop: 6 }}>
                       Haftalık gün hakkı doldu. Yine de ücretsiz kapatabilir ya da normal ücret alabilirsiniz.
@@ -806,17 +815,17 @@ export default function KasaEkrani() {
                   )}
                   {paketAsanDakika > 0 && (
                     <div style={{ marginTop: 6 }}>
-                      Günlük hakkı {formatSureMetni(paketAsanDakika)} aşıyor
+                      {bakiyePaketi ? "Kalan bakiyeyi" : "Günlük hakkı"} {formatSureMetni(paketAsanDakika)} aşıyor
                       {paketAsanTutar != null && paketAsanTutar > 0
                         ? ` · aşan süre ücreti ${formatKurus(paketAsanTutar)}`
                         : ""}
-                      .
+                      .{bakiyePaketi && " Ücretsiz düşülemez; aşan kısmı tahsil edin."}
                     </div>
                   )}
                   <div className="field-row" style={{ marginTop: 10 }}>
                     <button
                       className="secondary"
-                      disabled={kapatiliyor}
+                      disabled={kapatiliyor || (bakiyePaketi && paketAsanDakika > 0)}
                       onClick={() => odendiIsaretle(seciliSession.id, "paket", "ucretsiz")}
                     >
                       Paketten Düş (Ücretsiz)

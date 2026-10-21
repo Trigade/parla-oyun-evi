@@ -572,13 +572,19 @@ export default function Musteriler() {
                     {paketler.map((p) => (
                       <tr key={p.id}>
                         <td>{p.ad}</td>
-                        <td>{p.haftalik_gun} gün</td>
-                        <td>{formatSureMetni(p.gunluk_dakika)}</td>
+                        <td>{p.tur === "bakiye" ? "Saat bakiyeli" : `${p.haftalik_gun} gün`}</td>
+                        <td>
+                          {p.tur === "bakiye"
+                            ? `Kalan: ${formatSureMetni(p.kalan_dakika ?? 0)} / ${formatSureMetni(p.toplam_dakika ?? 0)} · ${formatKurus(p.kalan_deger_kurus ?? 0)}`
+                            : formatSureMetni(p.gunluk_dakika)}
+                        </td>
                         <td>{formatKurus(p.tutar_kurus)}</td>
                         <td>{p.gecerlilik_bitis}</td>
                         <td>
                           {p.suresi_dolmus_mu ? (
                             <span className="muted">Süresi Doldu</span>
+                          ) : p.tur === "bakiye" && !p.kalan_dakika ? (
+                            <span className="muted">Bakiye Bitti</span>
                           ) : (
                             <span className="badge badge--nakit">Aktif</span>
                           )}

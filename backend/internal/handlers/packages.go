@@ -18,6 +18,31 @@ import (
 // yapılan birden fazla giriş haftalık haktan tek gün düşer, günlük dakika
 // hakkı ise o gün pakete sayılan dakikaların toplamıdır. Hafta Pazartesi
 // günü başlar (Europe/Istanbul).
+//
+// Bunun yanında "saat bakiyeli" paketler de vardır (ör. 10 Saatlik Paket =
+// 600 dakika, sabit fiyat): günlük/haftalık sınır yoktur, bakiye bitene kadar
+// (satın alımdan 1 ay içinde) kullanılır. Tür ayrımı ayrı kolonla değil şöyle
+// yapılır: bakiye paketlerde haftalik_gun/gunluk_dakika NULL, dakika
+// (customer_packages'ta toplam_dakika/kalan_dakika) DOLUDUR. Bakiye pakette
+// aylik_ucret_kurus kolonu "paket fiyatı" anlamına gelir. Eski (0008) bakiye
+// tanımları fiyatsız ve pasif olduğu için satışta görünmez.
+
+// bakiyedenDus, oturum süresinin paket bakiyesinden ne kadarının karşılanacağını
+// hesaplar. Aşan süre varsa asiyor=true döner; "ucretsiz" modda bu durum
+// reddedilir, "asim" modda aşan kısım normal fiyattan ücretlendirilir.
+func bakiyedenDus(oturumDakika, kalanDakika int64) (dusulen, ucretlenecek int64, asiyor bool) {
+	dusulen = min(oturumDakika, kalanDakika)
+	return dusulen, oturumDakika - dusulen, oturumDakika > kalanDakika
+}
+
+// kalanDegerKurus, bakiye paketin kalan dakikasının değerini kuruş olarak
+// (aşağı yuvarlayarak) hesaplar.
+func kalanDegerKurus(tutarKurus, toplamDakika, kalanDakika int64) int64 {
+	if toplamDakika <= 0 {
+		return 0
+	}
+	return tutarKurus * kalanDakika / toplamDakika
+}
 
 // haftaBasi, verilen anın içinde bulunduğu haftanın Pazartesi 00:00'ını
 // (işletme saat dilimine göre) döner.
@@ -30,22 +55,41 @@ func haftaBasi(t time.Time) time.Time {
 
 type packageDefinitionItem struct {
 	ID              int64  `json:"id"`
+	Tur             string `json:"tur"` // "abonelik" | "bakiye"
 	Ad              string `json:"ad"`
 	Grup            string `json:"grup"`
+	Dakika          int64  `json:"dakika,omitempty"` // yalnızca bakiye
 	HaftalikGun     int64  `json:"haftalik_gun"`
 	GunlukDakika    int64  `json:"gunluk_dakika"`
 	AylikUcretKurus int64  `json:"aylik_ucret_kurus"`
 	Aktif           bool   `json:"aktif"`
 }
 
-// ListPackageDefinitions satın alınabilecek (aktif) paket türlerini döner.
-// Eski dakika bakiyesi paketleri (haftalik_gun boş) listelenmez.
+const paketTanimiKolonlari = `id, ad, grup, COALESCE(dakika, 0), COALESCE(haftalik_gun, 0),
+	COALESCE(gunluk_dakika, 0), aylik_ucret_kurus, aktif`
+
+// scan satırı okur ve haftalik_gun doluluğuna göre türü belirler.
+func (item *packageDefinitionItem) scan(row interface{ Scan(...any) error }) error {
+	if err := row.Scan(&item.ID, &item.Ad, &item.Grup, &item.Dakika, &item.HaftalikGun,
+		&item.GunlukDakika, &item.AylikUcretKurus, &item.Aktif); err != nil {
+		return err
+	}
+	item.Tur = "bakiye"
+	if item.HaftalikGun > 0 {
+		item.Tur = "abonelik"
+	}
+	return nil
+}
+
+// ListPackageDefinitions satın alınabilecek (aktif ve fiyatı dolu) abonelik
+// ve saat bakiyeli paket türlerini döner. Eski fiyatsız tanımlar listelenmez.
 func (a *API) ListPackageDefinitions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT id, ad, grup, haftalik_gun, gunluk_dakika, aylik_ucret_kurus, aktif
+		SELECT `+paketTanimiKolonlari+`
 		FROM package_definitions
-		WHERE aktif = true AND haftalik_gun IS NOT NULL
-		ORDER BY aylik_ucret_kurus DESC, ad ASC`)
+		WHERE aktif = true AND aylik_ucret_kurus IS NOT NULL
+			AND (haftalik_gun IS NOT NULL OR dakika IS NOT NULL)
+		ORDER BY (haftalik_gun IS NULL), aylik_ucret_kurus DESC, ad ASC`)
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "paket türleri alınamadı", err)
 		return
@@ -55,8 +99,7 @@ func (a *API) ListPackageDefinitions(w http.ResponseWriter, r *http.Request) {
 	result := []packageDefinitionItem{}
 	for rows.Next() {
 		var item packageDefinitionItem
-		if err := rows.Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun,
-			&item.GunlukDakika, &item.AylikUcretKurus, &item.Aktif); err != nil {
+		if err := item.scan(rows); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
@@ -66,8 +109,10 @@ func (a *API) ListPackageDefinitions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createPackageDefinitionRequest struct {
+	Tur             string `json:"tur"` // "abonelik" (varsayılan) | "bakiye"
 	Ad              string `json:"ad"`
 	Grup            string `json:"grup"`
+	Dakika          int64  `json:"dakika"`
 	HaftalikGun     int64  `json:"haftalik_gun"`
 	GunlukDakika    int64  `json:"gunluk_dakika"`
 	AylikUcretKurus int64  `json:"aylik_ucret_kurus"`
@@ -91,27 +136,41 @@ func (a *API) CreatePackageDefinition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "yaş/grup en fazla 50 karakter olabilir")
 		return
 	}
-	if req.HaftalikGun < 1 || req.HaftalikGun > 7 {
-		writeError(w, http.StatusBadRequest, "haftalık gün 1 ile 7 arasında olmalıdır")
+	bakiyeMi := req.Tur == "bakiye"
+	if req.Tur != "" && req.Tur != "abonelik" && !bakiyeMi {
+		writeError(w, http.StatusBadRequest, "paket türü 'abonelik' veya 'bakiye' olmalıdır")
 		return
 	}
-	if req.GunlukDakika < 1 || req.GunlukDakika > 1440 {
-		writeError(w, http.StatusBadRequest, "günlük süre 1 dakika ile 24 saat arasında olmalıdır")
-		return
+	var haftalikGun, gunlukDakika, dakika *int64 // bakiyede haftalık/günlük, abonelikte dakika NULL kalır
+	if bakiyeMi {
+		if req.Dakika < 1 || req.Dakika > 100000 {
+			writeError(w, http.StatusBadRequest, "paket süresi 1 dakika ile 100.000 dakika arasında olmalıdır")
+			return
+		}
+		dakika = &req.Dakika
+	} else {
+		if req.HaftalikGun < 1 || req.HaftalikGun > 7 {
+			writeError(w, http.StatusBadRequest, "haftalık gün 1 ile 7 arasında olmalıdır")
+			return
+		}
+		if req.GunlukDakika < 1 || req.GunlukDakika > 1440 {
+			writeError(w, http.StatusBadRequest, "günlük süre 1 dakika ile 24 saat arasında olmalıdır")
+			return
+		}
+		haftalikGun, gunlukDakika = &req.HaftalikGun, &req.GunlukDakika
 	}
 	if req.AylikUcretKurus < 0 {
-		writeError(w, http.StatusBadRequest, "aylık ücret negatif olamaz")
+		writeError(w, http.StatusBadRequest, "paket ücreti negatif olamaz")
 		return
 	}
 
 	var item packageDefinitionItem
-	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO package_definitions (ad, grup, haftalik_gun, gunluk_dakika, aylik_ucret_kurus)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, ad, grup, haftalik_gun, gunluk_dakika, aylik_ucret_kurus, aktif`,
-		req.Ad, req.Grup, req.HaftalikGun, req.GunlukDakika, req.AylikUcretKurus,
-	).Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun, &item.GunlukDakika,
-		&item.AylikUcretKurus, &item.Aktif)
+	err := item.scan(a.DB.QueryRow(r.Context(),
+		`INSERT INTO package_definitions (ad, grup, dakika, haftalik_gun, gunluk_dakika, aylik_ucret_kurus)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING `+paketTanimiKolonlari,
+		req.Ad, req.Grup, dakika, haftalikGun, gunlukDakika, req.AylikUcretKurus,
+	))
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "paket türü oluşturulamadı", err)
 		return
@@ -121,10 +180,14 @@ func (a *API) CreatePackageDefinition(w http.ResponseWriter, r *http.Request) {
 
 type customerPackageItem struct {
 	ID              int64  `json:"id"`
+	Tur             string `json:"tur"` // "abonelik" | "bakiye"
 	Ad              string `json:"ad"`
 	Grup            string `json:"grup"`
 	HaftalikGun     int64  `json:"haftalik_gun"`
 	GunlukDakika    int64  `json:"gunluk_dakika"`
+	ToplamDakika    int64  `json:"toplam_dakika,omitempty"` // yalnızca bakiye
+	KalanDakika     int64  `json:"kalan_dakika,omitempty"`  // yalnızca bakiye
+	KalanDegerKurus int64  `json:"kalan_deger_kurus,omitempty"`
 	TutarKurus      int64  `json:"tutar_kurus"`
 	OdemeTipi       string `json:"odeme_tipi"`
 	SatinAlmaZamani string `json:"satin_alma_zamani"`
@@ -132,8 +195,17 @@ type customerPackageItem struct {
 	SuresiDolmusMu  bool   `json:"suresi_dolmus_mu"`
 }
 
-// ListCustomerPackages bir müşterinin satın aldığı abonelik paketlerini
-// (en yeniden en eskiye) döner.
+// doldur türü belirler; bakiye paketlerde kalan değeri de hesaplar.
+func (item *customerPackageItem) doldur() {
+	item.Tur = "abonelik"
+	if item.HaftalikGun == 0 {
+		item.Tur = "bakiye"
+		item.KalanDegerKurus = kalanDegerKurus(item.TutarKurus, item.ToplamDakika, item.KalanDakika)
+	}
+}
+
+// ListCustomerPackages bir müşterinin satın aldığı abonelik ve saat bakiyeli
+// paketleri (en yeniden en eskiye) döner.
 func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -144,9 +216,10 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.DB.Query(r.Context(), `
 		SELECT id, ad, COALESCE(grup, ''), COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
+			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0),
 			tutar_kurus, COALESCE(odeme_tipi, ''), satin_alma_zamani, gecerlilik_bitis
 		FROM customer_packages
-		WHERE customer_id = $1 AND haftalik_gun IS NOT NULL
+		WHERE customer_id = $1 AND (haftalik_gun IS NOT NULL OR toplam_dakika IS NOT NULL)
 		ORDER BY satin_alma_zamani DESC`,
 		id,
 	)
@@ -161,10 +234,12 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 		var item customerPackageItem
 		var satinAlma, bitis time.Time
 		if err := rows.Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun, &item.GunlukDakika,
+			&item.ToplamDakika, &item.KalanDakika,
 			&item.TutarKurus, &item.OdemeTipi, &satinAlma, &bitis); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
+		item.doldur()
 		item.SatinAlmaZamani = satinAlma.Format("2006-01-02 15:04")
 		item.GecerlilikBitis = bitis.Format("2006-01-02 15:04")
 		item.SuresiDolmusMu = time.Now().After(bitis)
@@ -179,7 +254,7 @@ type purchasePackageRequest struct {
 }
 
 // PurchasePackage bir müşteriye paket tanımlar: haftalık gün, günlük dakika
-// ve ücret satın alma anındaki tanımdan kopyalanıp dondurulur (paket türü
+// (bakiye pakette toplam dakika) ve ücret satın alma anındaki tanımdan kopyalanıp dondurulur (paket türü
 // sonradan değişse bile bu satın alma etkilenmez). Paket satın alındığı andan
 // itibaren 1 ay geçerlidir. Tahsilat tipi (nakit/kart) kaydedilir ve tutar
 // o günün cirosuna dahil edilir.
@@ -221,15 +296,23 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bakiye pakette haftalik_gun/gunluk_dakika NULL kalır; dakika hem toplam
+	// hem kalan bakiye olarak yazılır.
 	var paketAdi, grup string
-	var haftalikGun, gunlukDakika, aylikUcretKurus int64
+	var haftalikGun, gunlukDakika, dakika *int64
+	var aylikUcretKurus int64
 	if err := tx.QueryRow(ctx,
-		`SELECT ad, grup, haftalik_gun, gunluk_dakika, aylik_ucret_kurus
-		 FROM package_definitions WHERE id = $1 AND aktif = true AND haftalik_gun IS NOT NULL`,
+		`SELECT ad, grup, haftalik_gun, gunluk_dakika, dakika, aylik_ucret_kurus
+		 FROM package_definitions
+		 WHERE id = $1 AND aktif = true AND aylik_ucret_kurus IS NOT NULL
+			AND (haftalik_gun IS NOT NULL OR dakika IS NOT NULL)`,
 		req.PackageDefinitionID,
-	).Scan(&paketAdi, &grup, &haftalikGun, &gunlukDakika, &aylikUcretKurus); err != nil {
+	).Scan(&paketAdi, &grup, &haftalikGun, &gunlukDakika, &dakika, &aylikUcretKurus); err != nil {
 		writeError(w, http.StatusNotFound, "paket türü bulunamadı")
 		return
+	}
+	if haftalikGun != nil {
+		dakika = nil // abonelikte toplam/kalan dakika tutulmaz
 	}
 
 	var item customerPackageItem
@@ -237,14 +320,15 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO customer_packages
 			(customer_id, package_definition_id, ad, grup, haftalik_gun, gunluk_dakika,
-			 tutar_kurus, odeme_tipi, gecerlilik_bitis, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + interval '1 month', $9)
-		RETURNING id, ad, grup, haftalik_gun, gunluk_dakika, tutar_kurus, odeme_tipi,
+			 toplam_dakika, kalan_dakika, tutar_kurus, odeme_tipi, gecerlilik_bitis, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, now() + interval '1 month', $10)
+		RETURNING id, ad, grup, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
+			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, odeme_tipi,
 			satin_alma_zamani, gecerlilik_bitis`,
 		customerID, req.PackageDefinitionID, paketAdi, grup, haftalikGun, gunlukDakika,
-		aylikUcretKurus, req.OdemeTipi, claims.UserID,
+		dakika, aylikUcretKurus, req.OdemeTipi, claims.UserID,
 	).Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun, &item.GunlukDakika,
-		&item.TutarKurus, &item.OdemeTipi, &satinAlma, &bitis); err != nil {
+		&item.ToplamDakika, &item.KalanDakika, &item.TutarKurus, &item.OdemeTipi, &satinAlma, &bitis); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "paket satın alınamadı", err)
 		return
 	}
@@ -254,6 +338,7 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	item.doldur()
 	item.SatinAlmaZamani = satinAlma.Format("2006-01-02 15:04")
 	item.GecerlilikBitis = bitis.Format("2006-01-02 15:04")
 	writeJSON(w, http.StatusCreated, item)
@@ -265,6 +350,10 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 type paketDurumu struct {
 	Var                   bool   `json:"var"`
 	CustomerPackageID     int64  `json:"customer_package_id,omitempty"`
+	Tur                   string `json:"tur,omitempty"` // "abonelik" | "bakiye"
+	ToplamDakika          int64  `json:"toplam_dakika,omitempty"`
+	KalanDakika           int64  `json:"kalan_dakika,omitempty"`
+	KalanDegerKurus       int64  `json:"kalan_deger_kurus,omitempty"`
 	Ad                    string `json:"ad,omitempty"`
 	Grup                  string `json:"grup,omitempty"`
 	HaftalikGun           int64  `json:"haftalik_gun,omitempty"`
@@ -277,24 +366,39 @@ type paketDurumu struct {
 	GecerlilikBitis       string `json:"gecerlilik_bitis,omitempty"`
 }
 
-// aktifPaketDurumu, müşterinin süresi dolmamış en son satın aldığı abonelik
-// paketini ve hak kullanımını hesaplar. Paket yoksa Var=false döner.
+// aktifPaketDurumu, müşterinin süresi dolmamış en son satın aldığı kullanılabilir
+// paketini (abonelik ya da bakiyesi bitmemiş saat bakiyeli paket) ve hak
+// kullanımını hesaplar. Paket yoksa Var=false döner. Bakiye pakette
+// KalanGunlukDakika kalan bakiyeye eşittir, böylece kasadaki "aşan süre"
+// mantığı iki türde de aynı çalışır.
 func aktifPaketDurumu(ctx context.Context, q querier, customerID int64) (paketDurumu, error) {
 	var d paketDurumu
 	var bitis time.Time
+	var tutar int64
 	err := q.QueryRow(ctx, `
-		SELECT id, ad, COALESCE(grup, ''), haftalik_gun, gunluk_dakika, gecerlilik_bitis
+		SELECT id, ad, COALESCE(grup, ''), COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
+			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, gecerlilik_bitis
 		FROM customer_packages
-		WHERE customer_id = $1 AND haftalik_gun IS NOT NULL AND gecerlilik_bitis > now()
+		WHERE customer_id = $1 AND gecerlilik_bitis > now()
+			AND (haftalik_gun IS NOT NULL OR kalan_dakika > 0)
 		ORDER BY satin_alma_zamani DESC
 		LIMIT 1`,
 		customerID,
-	).Scan(&d.CustomerPackageID, &d.Ad, &d.Grup, &d.HaftalikGun, &d.GunlukDakika, &bitis)
+	).Scan(&d.CustomerPackageID, &d.Ad, &d.Grup, &d.HaftalikGun, &d.GunlukDakika,
+		&d.ToplamDakika, &d.KalanDakika, &tutar, &bitis)
 	if err != nil {
 		return paketDurumu{}, nil
 	}
 	d.Var = true
 	d.GecerlilikBitis = bitis.Format("2006-01-02 15:04")
+	if d.HaftalikGun == 0 {
+		d.Tur = "bakiye"
+		d.KalanDegerKurus = kalanDegerKurus(tutar, d.ToplamDakika, d.KalanDakika)
+		d.KalanGunlukDakika = d.KalanDakika
+		return d, nil
+	}
+	d.Tur = "abonelik"
+	d.ToplamDakika, d.KalanDakika = 0, 0
 
 	var bugunkuOturumSayisi int64
 	if err := q.QueryRow(ctx, `

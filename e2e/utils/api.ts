@@ -1,8 +1,12 @@
 import * as dotenv from "dotenv";
+import { createHmac } from "crypto";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { psql } from "./db";
 import { genValidTC, genValidPhone } from "./tc";
 dotenv.config({ quiet: true });
 
-export const API_BASE = process.env.API_BASE_URL ?? "http://localhost:8080/api";
+export const API_BASE = process.env.API_BASE_URL ?? "http://localhost:5173/api";
 export const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? "admin";
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin123456";
 
@@ -29,14 +33,92 @@ async function req<T>(path: string, options: RequestInit = {}, token?: string): 
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
-export async function login(username: string, password: string): Promise<{
+export const TOTP_SECRET = process.env.E2E_TOTP_SECRET ?? "";
+
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** RFC 6238 TOTP (SHA1, 6 hane, 30 sn) — backend/internal/auth/totp.go ile aynı parametreler. */
+export function totpCode(secret: string = TOTP_SECRET, adim: number = Math.floor(Date.now() / 30000)): string {
+  let bits = "";
+  for (const c of secret.toUpperCase().replace(/[\s=]/g, "")) bits += B32.indexOf(c).toString(2).padStart(5, "0");
+  const key = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(adim));
+  const h = createHmac("sha1", key).update(buf).digest();
+  const o = h[h.length - 1] & 0x0f;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+// Backend aynı kullanıcı için kullanılmış 30 sn adımını (users.totp_son_adim) bir daha kabul etmez ve
+// yalnızca daha büyük adımı kabul eder. Önceki koşulardan kalan durum için gerçek değeri DB'den okuruz.
+/** `kullanici` için daha önce kullanılmamış (daha büyük) bir adımın kodunu üretir; gerekirse adım gelene kadar bekler. */
+export async function totpKodu(kullanici: string, secret: string = TOTP_SECRET): Promise<string> {
+  if (!/^[A-Za-z0-9_.-]+$/.test(kullanici)) throw new Error("geçersiz kullanıcı adı");
+  const simdi = () => Math.floor(Date.now() / 30000);
+  const hedef = () => {
+    const son = psql(`SELECT totp_son_adim FROM users WHERE username = '${kullanici}'`);
+    return Math.max((son === "" ? -Infinity : Number(son)) + 1, simdi());
+  };
+  let adim = hedef();
+  // Şimdiki adım seçilir (UI'dan gönderim sürerken 30 sn sınırı geçilse bile -1 penceresi içinde kalır).
+  // Backend -1/0/+1 kabul eder; adım bunun ötesindeyse sınırı bekle.
+  while (adim > simdi() + 1) {
+    await new Promise((r) => setTimeout(r, 500));
+    adim = hedef();
+  }
+  return totpCode(secret, adim);
+}
+
+interface LoginResult {
   token: string;
   user_id: number;
   is_admin: boolean;
   permissions: string[];
-}> {
-  return req("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
 }
+
+/** Kullanıcı adı/şifre + (TOTP kuruluysa) E2E_TOTP_SECRET'tan üretilen kodla tam oturum token'ı alır. */
+export const ADMIN_TOKEN_DOSYASI = join(__dirname, "..", ".auth", "admin-token.json");
+const tokenOnbellek = new Map<string, LoginResult>();
+export async function login(username: string, password: string): Promise<LoginResult> {
+  // Aynı süreçte aynı kullanıcıyla tekrar TOTP girişi yapmamak için başarılı girişi önbelleğe al (token 12 saat geçerli).
+  const key = `${username}:${password}`;
+  const onbellekte = tokenOnbellek.get(key);
+  if (onbellekte) return onbellekte;
+  // Admin için global-setup'ın yazdığı oturum varsa kullan (TOTP beklemesi test timeout'una girmesin); geçersizse normal giriş.
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD && existsSync(ADMIN_TOKEN_DOSYASI)) {
+    try {
+      const kayit = JSON.parse(readFileSync(ADMIN_TOKEN_DOSYASI, "utf-8")) as LoginResult;
+      await req("/business-day/current", {}, kayit.token); // 401 ise fırlatır
+      tokenOnbellek.set(key, kayit);
+      return kayit;
+    } catch {}
+  }
+  const sonuc = await tamGiris(username, password);
+  tokenOnbellek.set(key, sonuc);
+  return sonuc;
+}
+
+async function tamGiris(username: string, password: string): Promise<LoginResult> {
+  const res = await req<any>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+  if (res.token) return res;
+  // Test kullanıcıları (createUser) TOTP'siz doğar: ilk girişte kurulumu API'den tamamla.
+  // Sır yalnızca bu çağrıda kullanılır; aynı kullanıcı sonradan tekrar girerse kod üretilemez.
+  if (res.totp_setup_required) {
+    const kurulum = await req<{ secret: string }>("/auth/totp/setup-init", { method: "POST" }, res.setup_token);
+    return req("/auth/totp/setup-confirm", { method: "POST", body: JSON.stringify({ code: totpCode(kurulum.secret) }) }, res.setup_token);
+  }
+  if (!TOTP_SECRET) throw new Error("TOTP gerekli ama E2E_TOTP_SECRET tanımlı değil (.env)");
+  // Aynı süreçte aynı kullanıcı için ilk TOTP hatasını sakla; tekrar denemeler 429'a dönüşmesin.
+  const eski = totpHata.get(username);
+  if (eski) throw eski;
+  try {
+    return await req("/auth/totp/verify-login", { method: "POST", body: JSON.stringify({ code: await totpKodu(username) }) }, res.pending_token);
+  } catch (e) {
+    totpHata.set(username, e as Error);
+    throw e;
+  }
+}
+const totpHata = new Map<string, Error>();
 
 let cachedAdminToken: string | null = null;
 export async function adminToken(): Promise<string> {
@@ -170,4 +252,72 @@ export async function createCheckedInTestCustomer(
   const telefon = overrides.telefon ?? genValidPhone();
   const res = await startSession(token, { tc_kimlik_no: tc, ad, soyad, telefon });
   return { customerId: res.musteri.id, sessionId: res.oturum.id, ad, soyad, tc, telefon };
+}
+
+export interface PricingTier {
+  min_dakika: number;
+  max_dakika: number;
+  tutar_kurus: number;
+}
+
+export async function getActivePricingPolicy(token: string): Promise<{ version_id: number; tiers: PricingTier[] }> {
+  return req("/pricing-tiers/active", {}, token);
+}
+
+export async function createPricingPolicy(token: string, tiers: PricingTier[]): Promise<{ version_id: number }> {
+  return req("/pricing-tiers", { method: "POST", body: JSON.stringify({ tiers }) }, token);
+}
+
+export interface CustomerPackage {
+  id: number;
+  tur: "abonelik" | "bakiye";
+  toplam_dakika?: number;
+  kalan_dakika?: number;
+  kalan_deger_kurus?: number;
+  tutar_kurus: number;
+}
+
+export async function createPackageDefinition(
+  token: string,
+  data: { tur: "abonelik" | "bakiye"; ad: string; dakika?: number; aylik_ucret_kurus: number }
+): Promise<{ id: number }> {
+  return req("/package-definitions", { method: "POST", body: JSON.stringify(data) }, token);
+}
+
+export async function purchasePackage(
+  token: string,
+  customerId: number,
+  packageDefinitionId: number,
+  odemeTipi: "nakit" | "kredi_karti" = "nakit"
+): Promise<CustomerPackage> {
+  return req(
+    `/customers/${customerId}/packages`,
+    { method: "POST", body: JSON.stringify({ package_definition_id: packageDefinitionId, odeme_tipi: odemeTipi }) },
+    token
+  );
+}
+
+export async function listCustomerPackages(token: string, customerId: number): Promise<CustomerPackage[]> {
+  return req(`/customers/${customerId}/packages`, {}, token);
+}
+
+export async function getPackageStatus(token: string, customerId: number): Promise<{ var: boolean; kalan_dakika?: number }> {
+  return req(`/customers/${customerId}/package-status`, {}, token);
+}
+
+export async function getCustomerSessions(
+  token: string,
+  customerId: number
+): Promise<{ id: number; durum: string; toplam_dakika?: number; tahsil_tutar_kurus?: number; paketten_dusulen_dakika: number }[]> {
+  return req(`/customers/${customerId}/sessions`, {}, token);
+}
+
+export async function deleteCustomer(token: string, id: number): Promise<void> {
+  await req(`/customers/${id}`, { method: "DELETE" }, token);
+}
+
+/** TC ile müşteri id'sini bulur (UI'dan oluşturulan test müşterilerini temizlemek için); yoksa null. */
+export async function findCustomerIdByTC(token: string, tc: string): Promise<number | null> {
+  const res = await req<{ bulundu: boolean; musteri?: { id: number } }>(`/customers/by-tc/${tc}`, {}, token);
+  return res.bulundu && res.musteri ? res.musteri.id : null;
 }

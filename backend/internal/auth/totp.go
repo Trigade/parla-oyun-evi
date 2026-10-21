@@ -64,12 +64,18 @@ func totpCodeAt(secret string, counter uint64) (string, error) {
 
 // VerifyTOTPCode girilen 6 haneli kodu, saat kaymalarını tolere etmek için
 // şu anki zaman penceresi ile bir önceki/sonraki pencereye karşı doğrular.
-func VerifyTOTPCode(secret, code string) bool {
+// Eşleşen zaman adımını da döner; çağıran, aynı kodun tekrar kullanılmaması
+// için bu adımı kullanıcı başına saklamalıdır (users.totp_son_adim).
+func VerifyTOTPCode(secret, code string) (int64, bool) {
+	return verifyTOTPCodeAt(secret, code, time.Now())
+}
+
+func verifyTOTPCodeAt(secret, code string, now time.Time) (int64, bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != 6 {
-		return false
+		return 0, false
 	}
-	counter := uint64(time.Now().Unix() / totpPeriodSeconds)
+	counter := uint64(now.Unix() / totpPeriodSeconds)
 	for _, delta := range [3]int64{0, -1, 1} {
 		c := counter
 		if delta < 0 {
@@ -79,8 +85,8 @@ func VerifyTOTPCode(secret, code string) bool {
 		}
 		expected, err := totpCodeAt(secret, c)
 		if err == nil && hmac.Equal([]byte(expected), []byte(code)) {
-			return true
+			return int64(c), true
 		}
 	}
-	return false
+	return 0, false
 }
