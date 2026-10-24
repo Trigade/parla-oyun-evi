@@ -302,6 +302,7 @@ export interface PricingTier {
 export interface PricingPolicy {
   version_id: number;
   effective_from: string;
+  yuvarlama_tolerans_dakika: number;
   tiers: PricingTier[];
 }
 
@@ -314,9 +315,11 @@ export interface PricingTierInput {
 // Verilen dakikanın düştüğü bloğun ücretini bulur. Tanımlı en yüksek blok
 // (son bloğun bitişi) bir "tur" oluşturur; bunu aşan sürelerde ücret modüler
 // (döngüsel) hesaplanır — backend'deki tierUcretiniHesapla ile aynı mantık.
+// Tolerans: ücret max(1, dakika - tolerans) dakikanın ücretidir (dakika 0 ise 0).
 // Yalnızca canlı önizleme içindir, gerçek tutar sunucuda otoriter hesaplanır.
 export function tierUcretiHesapla(dakika: number, policy: PricingPolicy | null): number | null {
   if (!policy || policy.tiers.length === 0) return null;
+  if (dakika > 0) dakika = Math.max(1, dakika - policy.yuvarlama_tolerans_dakika);
   const sonTier = policy.tiers[policy.tiers.length - 1];
   const turDakika = sonTier.max_dakika;
 
@@ -381,6 +384,10 @@ export interface CustomerPackage {
   satin_alma_zamani: string;
   gecerlilik_bitis: string;
   suresi_dolmus_mu: boolean;
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
 }
 
 // Müşterinin aktif paketindeki güncel hak kullanımı (kasa ekranı için).
@@ -401,6 +408,26 @@ export interface PackageStatus {
   bugun_pakete_sayildi_mi: boolean;
   gun_hakki_doldu_mu: boolean;
   gecerlilik_bitis?: string;
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
+}
+
+// Abonelikte kalan hakkı tek satırda anlatır (kasa ve satın alma ekranları).
+export function abonelikOzetiMetni(p: {
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
+  gecerlilik_bitis?: string;
+}): string {
+  const [yil, ay, gun] = (p.gecerlilik_bitis ?? "").slice(0, 10).split("-");
+  return (
+    `Bugün kalan: ${formatSureMetni(p.bugun_kalan_dakika ?? 0)} · ` +
+    `Bu hafta kalan: ${p.bu_hafta_kalan_gun ?? 0} gün (toplam ${formatSureMetni(p.bu_hafta_kalan_dakika ?? 0)}) · ` +
+    `Paket bitişi: ${gun}.${ay}.${yil} (${p.bitise_kalan_gun ?? 0} gün kaldı)`
+  );
 }
 
 export const api = {
@@ -461,21 +488,34 @@ export const api = {
     odeme_tipi: "nakit" | "kredi_karti" | "paket",
     yuvarla: boolean,
     indirimKurus = 0,
-    paketModu: "" | "ucretsiz" | "asim" = ""
+    paketModu: "" | "ucretsiz" | "asim" = "",
+    ozelTutarKurus?: number // yalnızca yönetici: tek seferlik elle tutar
   ) =>
-    request(`/sessions/${id}/close`, {
+    request<{ silindi?: boolean }>(`/sessions/${id}/close`, {
       method: "POST",
-      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus, paket_modu: paketModu }),
+      body: JSON.stringify({
+        odeme_tipi,
+        yuvarla,
+        indirim_kurus: indirimKurus,
+        paket_modu: paketModu,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
   payEarlySession: (
     id: number,
     odeme_tipi: "nakit" | "kredi_karti" | "paket",
     yuvarla: boolean,
-    indirimKurus = 0
+    indirimKurus = 0,
+    ozelTutarKurus?: number
   ) =>
     request(`/sessions/${id}/pay-early`, {
       method: "POST",
-      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus }),
+      body: JSON.stringify({
+        odeme_tipi,
+        yuvarla,
+        indirim_kurus: indirimKurus,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
   checkOutSession: (id: number) => request(`/sessions/${id}/check-out`, { method: "POST" }),
   extendSessionDuration: (id: number, ekDakika: number) =>
@@ -562,10 +602,10 @@ export const api = {
     }),
   getActivePricingPolicy: () => request<PricingPolicy>("/pricing-tiers/active"),
   listPricingPolicies: () => request<PricingPolicy[]>("/pricing-tiers"),
-  createPricingPolicy: (tiers: PricingTierInput[]) =>
+  createPricingPolicy: (tiers: PricingTierInput[], yuvarlama_tolerans_dakika: number) =>
     request<PricingPolicy>("/pricing-tiers", {
       method: "POST",
-      body: JSON.stringify({ tiers }),
+      body: JSON.stringify({ tiers, yuvarlama_tolerans_dakika }),
     }),
   getCurrentBusinessDay: () => request<CurrentBusinessDayResponse>("/business-day/current"),
   startBusinessDay: () =>
@@ -601,10 +641,15 @@ export const api = {
   purchasePackage: (
     customerId: number,
     packageDefinitionId: number,
-    odemeTipi: "nakit" | "kredi_karti"
+    odemeTipi: "nakit" | "kredi_karti",
+    ozelTutarKurus?: number
   ) =>
     request<CustomerPackage>(`/customers/${customerId}/packages`, {
       method: "POST",
-      body: JSON.stringify({ package_definition_id: packageDefinitionId, odeme_tipi: odemeTipi }),
+      body: JSON.stringify({
+        package_definition_id: packageDefinitionId,
+        odeme_tipi: odemeTipi,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
 };

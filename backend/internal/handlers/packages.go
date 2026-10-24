@@ -53,6 +53,50 @@ func haftaBasi(t time.Time) time.Time {
 	return time.Date(yil, ay, gun, 0, 0, 0, 0, BusinessLocation).AddDate(0, 0, -gunFarki)
 }
 
+// abonelikHaklari, aboneliğin kalan hakkını anlatır (kasa/müşteri özeti için).
+// Bakiye pakette yalnızca BitiseKalanGun dolar.
+type abonelikHaklari struct {
+	BugunKalanDakika  int64 `json:"bugun_kalan_dakika"`
+	BuHaftaKalanGun   int64 `json:"bu_hafta_kalan_gun"`
+	BuHaftaKalanDakika int64 `json:"bu_hafta_kalan_dakika"`
+	BitiseKalanGun    int64 `json:"bitise_kalan_gun"`
+}
+
+// takvimGunFarki, iki anın işletme saat dilimindeki takvim günleri arasındaki farktır.
+func takvimGunFarki(bas, son time.Time) int64 {
+	b, s := bas.In(BusinessLocation), son.In(BusinessLocation)
+	by, bm, bg := b.Date()
+	sy, sm, sg := s.Date()
+	return int64(time.Date(sy, sm, sg, 0, 0, 0, 0, time.UTC).Sub(time.Date(by, bm, bg, 0, 0, 0, 0, time.UTC)) / (24 * time.Hour))
+}
+
+// abonelikKalanHaklar saf hesaptır (zaman parametre). Bu haftanın kalan günü
+// hem haftalık haktan hem de hafta sonuna (Pazar) ve paket bitişine kadar
+// kalan takvim günlerinden büyük olamaz; bugün pakete sayılmışsa bugün
+// zaten kullanılan günlerdedir, bu yüzden takvimden de düşülür.
+func abonelikKalanHaklar(simdi, bitis time.Time, haftalikGun, gunlukDakika, buHaftaKullanilanGun, bugunKullanilanDakika int64, bugunSayildi bool) abonelikHaklari {
+	bitiseKalanGun := max(0, takvimGunFarki(simdi, bitis))
+	kalanGunluk := max(0, gunlukDakika-bugunKullanilanDakika)
+	gunHakkiDoldu := !bugunSayildi && buHaftaKullanilanGun >= haftalikGun
+
+	haftaSonuna := int64(7 - (int(simdi.In(BusinessLocation).Weekday())+6)%7) // bugün dahil, Pazar dahil
+	takvim := min(haftaSonuna, bitiseKalanGun+1)
+	if bugunSayildi {
+		takvim--
+	}
+	h := abonelikHaklari{BitiseKalanGun: bitiseKalanGun}
+	h.BuHaftaKalanGun = max(0, min(haftalikGun-buHaftaKullanilanGun, takvim))
+	if gunHakkiDoldu {
+		return h
+	}
+	h.BugunKalanDakika = kalanGunluk
+	h.BuHaftaKalanDakika = h.BuHaftaKalanGun * gunlukDakika
+	if bugunSayildi {
+		h.BuHaftaKalanDakika += kalanGunluk
+	}
+	return h
+}
+
 type packageDefinitionItem struct {
 	ID              int64  `json:"id"`
 	Tur             string `json:"tur"` // "abonelik" | "bakiye"
@@ -193,6 +237,7 @@ type customerPackageItem struct {
 	SatinAlmaZamani string `json:"satin_alma_zamani"`
 	GecerlilikBitis string `json:"gecerlilik_bitis"`
 	SuresiDolmusMu  bool   `json:"suresi_dolmus_mu"`
+	abonelikHaklari        // yalnızca süresi dolmamış abonelikte dolu
 }
 
 // doldur türü belirler; bakiye paketlerde kalan değeri de hesaplar.
@@ -230,6 +275,7 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	result := []customerPackageItem{}
+	bitisler := []time.Time{}
 	for rows.Next() {
 		var item customerPackageItem
 		var satinAlma, bitis time.Time
@@ -244,6 +290,20 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 		item.GecerlilikBitis = bitis.Format("2006-01-02 15:04")
 		item.SuresiDolmusMu = time.Now().After(bitis)
 		result = append(result, item)
+		bitisler = append(bitisler, bitis)
+	}
+	rows.Close()
+	for i := range result {
+		item := &result[i]
+		if item.Tur != "abonelik" || item.SuresiDolmusMu {
+			continue
+		}
+		gun, dk, oturum, err := abonelikKullanimi(r.Context(), a.DB, item.ID)
+		if err != nil {
+			writeServerError(w, http.StatusInternalServerError, "paket kullanımı alınamadı", err)
+			return
+		}
+		item.abonelikHaklari = abonelikKalanHaklar(time.Now(), bitisler[i], item.HaftalikGun, item.GunlukDakika, gun, dk, oturum > 0)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -251,6 +311,8 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 type purchasePackageRequest struct {
 	PackageDefinitionID int64  `json:"package_definition_id"`
 	OdemeTipi           string `json:"odeme_tipi"`
+	// Yalnızca yönetici: paket ücreti yerine bu tutar tahsil edilir (tek seferlik).
+	OzelTutarKurus *int64 `json:"ozel_tutar_kurus"`
 }
 
 // PurchasePackage bir müşteriye paket tanımlar: haftalık gün, günlük dakika
@@ -279,6 +341,9 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" {
 		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit' veya 'Kredi Kartı' olmalıdır.")
+		return
+	}
+	if _, ok := ozelTutarYetkisi(w, r, req.OzelTutarKurus); !ok {
 		return
 	}
 
@@ -315,6 +380,11 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 		dakika = nil // abonelikte toplam/kalan dakika tutulmaz
 	}
 
+	tutarKurus := aylikUcretKurus
+	if req.OzelTutarKurus != nil {
+		tutarKurus = *req.OzelTutarKurus
+	}
+
 	var item customerPackageItem
 	var satinAlma, bitis time.Time
 	if err := tx.QueryRow(ctx, `
@@ -326,11 +396,17 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, odeme_tipi,
 			satin_alma_zamani, gecerlilik_bitis`,
 		customerID, req.PackageDefinitionID, paketAdi, grup, haftalikGun, gunlukDakika,
-		dakika, aylikUcretKurus, req.OdemeTipi, claims.UserID,
+		dakika, tutarKurus, req.OdemeTipi, claims.UserID,
 	).Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun, &item.GunlukDakika,
 		&item.ToplamDakika, &item.KalanDakika, &item.TutarKurus, &item.OdemeTipi, &satinAlma, &bitis); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "paket satın alınamadı", err)
 		return
+	}
+	if req.OzelTutarKurus != nil {
+		if err := ozelTutarAuditYaz(ctx, tx, claims.UserID, "customer_packages", item.ID, aylikUcretKurus, tutarKurus); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "audit log yazılamadı", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -364,6 +440,7 @@ type paketDurumu struct {
 	BugunPaketeSayildiMi  bool   `json:"bugun_pakete_sayildi_mi"`
 	GunHakkiDolduMu       bool   `json:"gun_hakki_doldu_mu"`
 	GecerlilikBitis       string `json:"gecerlilik_bitis,omitempty"`
+	abonelikHaklari
 }
 
 // aktifPaketDurumu, müşterinin süresi dolmamış en son satın aldığı kullanılabilir
@@ -395,13 +472,36 @@ func aktifPaketDurumu(ctx context.Context, q querier, customerID int64) (paketDu
 		d.Tur = "bakiye"
 		d.KalanDegerKurus = kalanDegerKurus(tutar, d.ToplamDakika, d.KalanDakika)
 		d.KalanGunlukDakika = d.KalanDakika
+		d.BitiseKalanGun = max(0, takvimGunFarki(time.Now(), bitis))
 		return d, nil
 	}
 	d.Tur = "abonelik"
 	d.ToplamDakika, d.KalanDakika = 0, 0
 
 	var bugunkuOturumSayisi int64
-	if err := q.QueryRow(ctx, `
+	var err2 error
+	d.BuHaftaKullanilanGun, d.BugunKullanilanDakika, bugunkuOturumSayisi, err2 = abonelikKullanimi(ctx, q, d.CustomerPackageID)
+	if err2 != nil {
+		return paketDurumu{}, err2
+	}
+
+	d.BugunPaketeSayildiMi = bugunkuOturumSayisi > 0
+	d.KalanGunlukDakika = d.GunlukDakika - d.BugunKullanilanDakika
+	if d.KalanGunlukDakika < 0 {
+		d.KalanGunlukDakika = 0
+	}
+	// Bugün zaten pakete sayılmış bir giriş varsa yeni bir gün hakkı
+	// tüketilmez; o yüzden gün hakkı yalnızca yeni bir gün için dolmuş sayılır.
+	d.GunHakkiDolduMu = !d.BugunPaketeSayildiMi && d.BuHaftaKullanilanGun >= d.HaftalikGun
+	d.abonelikHaklari = abonelikKalanHaklar(time.Now(), bitis, d.HaftalikGun, d.GunlukDakika,
+		d.BuHaftaKullanilanGun, d.BugunKullanilanDakika, d.BugunPaketeSayildiMi)
+	return d, nil
+}
+
+// abonelikKullanimi bir abonelik paketinin bu haftaki kullanılan gün sayısını,
+// bugün pakete düşülen dakikayı ve bugünkü oturum sayısını döner.
+func abonelikKullanimi(ctx context.Context, q querier, paketID int64) (gun, bugunDakika, bugunOturum int64, err error) {
+	err = q.QueryRow(ctx, `
 		SELECT
 			COUNT(DISTINCT (giris_zamani AT TIME ZONE 'Europe/Istanbul')::date)
 				FILTER (WHERE giris_zamani >= $2),
@@ -413,20 +513,9 @@ func aktifPaketDurumu(ctx context.Context, q querier, customerID int64) (paketDu
 					= (now() AT TIME ZONE 'Europe/Istanbul')::date)
 		FROM sessions
 		WHERE customer_package_id = $1`,
-		d.CustomerPackageID, haftaBasi(time.Now()),
-	).Scan(&d.BuHaftaKullanilanGun, &d.BugunKullanilanDakika, &bugunkuOturumSayisi); err != nil {
-		return paketDurumu{}, err
-	}
-
-	d.BugunPaketeSayildiMi = bugunkuOturumSayisi > 0
-	d.KalanGunlukDakika = d.GunlukDakika - d.BugunKullanilanDakika
-	if d.KalanGunlukDakika < 0 {
-		d.KalanGunlukDakika = 0
-	}
-	// Bugün zaten pakete sayılmış bir giriş varsa yeni bir gün hakkı
-	// tüketilmez; o yüzden gün hakkı yalnızca yeni bir gün için dolmuş sayılır.
-	d.GunHakkiDolduMu = !d.BugunPaketeSayildiMi && d.BuHaftaKullanilanGun >= d.HaftalikGun
-	return d, nil
+		paketID, haftaBasi(time.Now()),
+	).Scan(&gun, &bugunDakika, &bugunOturum)
+	return
 }
 
 // GetCustomerPackageStatus kasa ekranı için müşterinin paket durumunu döner.

@@ -260,12 +260,12 @@ export interface PricingTier {
   tutar_kurus: number;
 }
 
-export async function getActivePricingPolicy(token: string): Promise<{ version_id: number; tiers: PricingTier[] }> {
+export async function getActivePricingPolicy(token: string): Promise<{ version_id: number; yuvarlama_tolerans_dakika: number; tiers: PricingTier[] }> {
   return req("/pricing-tiers/active", {}, token);
 }
 
-export async function createPricingPolicy(token: string, tiers: PricingTier[]): Promise<{ version_id: number }> {
-  return req("/pricing-tiers", { method: "POST", body: JSON.stringify({ tiers }) }, token);
+export async function createPricingPolicy(token: string, tiers: PricingTier[], yuvarlama_tolerans_dakika?: number): Promise<{ version_id: number }> {
+  return req("/pricing-tiers", { method: "POST", body: JSON.stringify({ tiers, yuvarlama_tolerans_dakika }) }, token);
 }
 
 export interface CustomerPackage {
@@ -279,7 +279,7 @@ export interface CustomerPackage {
 
 export async function createPackageDefinition(
   token: string,
-  data: { tur: "abonelik" | "bakiye"; ad: string; dakika?: number; aylik_ucret_kurus: number }
+  data: { tur: "abonelik" | "bakiye"; ad: string; dakika?: number; haftalik_gun?: number; gunluk_dakika?: number; aylik_ucret_kurus: number }
 ): Promise<{ id: number }> {
   return req("/package-definitions", { method: "POST", body: JSON.stringify(data) }, token);
 }

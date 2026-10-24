@@ -42,6 +42,7 @@ export default function FiyatPolitikasi() {
   const [aktifPolitika, setAktifPolitika] = useState<PricingPolicy | null>(null);
   const [gecmisPolitika, setGecmisPolitika] = useState<PricingPolicy[]>([]);
   const [fiyatlar, setFiyatlar] = useState<string[]>(() => SABIT_BLOKLAR.map((b) => String(b.varsayilanTL)));
+  const [tolerans, setTolerans] = useState("10");
   const [hata, setHata] = useState<string | null>(null);
   const [basari, setBasari] = useState<string | null>(null);
   const [yukleniyor, setYukleniyor] = useState(false);
@@ -57,6 +58,7 @@ export default function FiyatPolitikasi() {
       ]);
       setAktifPolitika(aktif);
       setGecmisPolitika(tumu);
+      if (aktif) setTolerans(String(aktif.yuvarlama_tolerans_dakika));
       setFiyatlar(
         aktif && sabitYapidaMi(aktif)
           ? aktif.tiers.map((t) => (t.tutar_kurus / 100).toString())
@@ -95,9 +97,15 @@ export default function FiyatPolitikasi() {
       });
     }
 
+    const toleransDk = Number(tolerans);
+    if (tolerans.trim() === "" || !Number.isInteger(toleransDk) || toleransDk < 0 || toleransDk > 30) {
+      setHata("Tolerans 0 ile 30 arasında tam sayı olmalıdır.");
+      return;
+    }
+
     setKaydediliyor(true);
     try {
-      const politika = await api.createPricingPolicy(tiers);
+      const politika = await api.createPricingPolicy(tiers, toleransDk);
       setBasari(`Yeni fiyatlar ${politika.effective_from} itibarıyla geçerli.`);
       await refresh();
     } catch (e) {
@@ -169,6 +177,19 @@ export default function FiyatPolitikasi() {
               ücret, kalan süre için de düştüğü bloğun ücreti eklenir.
             </p>
             <div className="field-row" style={{ marginTop: 8 }}>
+              <label htmlFor="tolerans">Tolerans (dk)</label>
+              <input
+                id="tolerans"
+                inputMode="numeric"
+                value={tolerans}
+                onChange={(e) => setTolerans(e.target.value)}
+                style={{ maxWidth: 100 }}
+              />
+            </div>
+            <p className="muted" style={{ marginTop: 4 }}>
+              Bir blok bu kadar dakikaya kadar aşılırsa bir sonraki blok ücreti alınmaz.
+            </p>
+            <div className="field-row" style={{ marginTop: 8 }}>
               <button onClick={kaydet} disabled={kaydediliyor}>
                 {kaydediliyor ? "Kaydediliyor..." : "Kaydet ve Uygula"}
               </button>
@@ -187,6 +208,7 @@ export default function FiyatPolitikasi() {
                     {aktifPolitika?.version_id === p.version_id && (
                       <span className="badge badge--nakit" style={{ marginLeft: 8 }}>Aktif</span>
                     )}
+                    <span className="muted" style={{ marginLeft: 8 }}>Tolerans: {p.yuvarlama_tolerans_dakika} dk</span>
                   </p>
                   <table>
                     <tbody>

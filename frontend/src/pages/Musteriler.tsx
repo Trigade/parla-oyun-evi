@@ -576,7 +576,9 @@ export default function Musteriler() {
                         <td>
                           {p.tur === "bakiye"
                             ? `Kalan: ${formatSureMetni(p.kalan_dakika ?? 0)} / ${formatSureMetni(p.toplam_dakika ?? 0)} · ${formatKurus(p.kalan_deger_kurus ?? 0)}`
-                            : formatSureMetni(p.gunluk_dakika)}
+                            : p.suresi_dolmus_mu
+                              ? formatSureMetni(p.gunluk_dakika)
+                              : `${formatSureMetni(p.gunluk_dakika)} · Bu hafta kalan: ${p.bu_hafta_kalan_gun ?? 0} gün · bugün ${formatSureMetni(p.bugun_kalan_dakika ?? 0)}`}
                         </td>
                         <td>{formatKurus(p.tutar_kurus)}</td>
                         <td>{p.gecerlilik_bitis}</td>

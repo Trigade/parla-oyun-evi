@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"parla-oyun-evi/backend/internal/auth"
 )
@@ -71,6 +73,47 @@ type closeSessionRequest struct {
 	//   "asim"     → günlük hak kadarı pakete sayılır, aşan süre tahsil edilir
 	//                (bu durumda odeme_tipi nakit/kredi_karti olmalıdır)
 	PaketModu string `json:"paket_modu"`
+	// OzelTutarKurus yalnızca yöneticiler içindir: dolu ise tahsil edilecek tutar
+	// budur; yuvarlama ve indirim yok sayılır (tek seferlik, kalıcı fiyat değil).
+	OzelTutarKurus *int64 `json:"ozel_tutar_kurus"`
+}
+
+// ozelTutarYetkisi, istekte özel tutar varsa çağıranın yönetici olduğunu ve
+// tutarın negatif olmadığını doğrular. Özel tutar yoksa her zaman ok döner.
+// Yönetici kontrolü backend'de zorunludur; frontend gizlemesi yetmez.
+func ozelTutarYetkisi(w http.ResponseWriter, r *http.Request, ozel *int64) (userID int64, ok bool) {
+	claims, found := auth.FromContext(r.Context())
+	if !found {
+		writeError(w, http.StatusUnauthorized, "Yetkilendirme bilgisi bulunamadı, lütfen tekrar giriş yapın.")
+		return 0, false
+	}
+	if ozel == nil {
+		return claims.UserID, true
+	}
+	if !claims.IsAdmin {
+		writeError(w, http.StatusForbidden, "Özel tutar yalnızca yöneticiler tarafından girilebilir.")
+		return 0, false
+	}
+	if *ozel < 0 {
+		writeError(w, http.StatusBadRequest, "Özel tutar negatif olamaz.")
+		return 0, false
+	}
+	return claims.UserID, true
+}
+
+// ozelTutarAuditYaz özel tutarla alınan her tahsilatı denetim izine düşer.
+func ozelTutarAuditYaz(ctx context.Context, tx pgx.Tx, userID int64, tablo string, hedefID, normal, ozel int64) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO audit_log (user_id, action, target_table, target_id, detail)
+		 VALUES ($1, 'ozel_tutar', $2, $3, $4)`,
+		userID, tablo, hedefID, map[string]any{"normal_tutar_kurus": normal, "ozel_tutar_kurus": ozel},
+	)
+	return err
+}
+
+// ozelTutarHesapla özel tutar varsa tahsilatı ve indirimi buna göre döndürür.
+func ozelTutarHesapla(orijinal, ozel int64) (tahsil, indirim int64) {
+	return ozel, max(0, orijinal-ozel)
 }
 
 // CloseSession oturumu çıkış anıyla kapatır: aktif fiyat kuralına göre tam
@@ -95,6 +138,10 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Geçersiz paket seçimi.")
 		return
 	}
+	if req.PaketModu == "ucretsiz" && req.OzelTutarKurus != nil {
+		writeError(w, http.StatusBadRequest, "Pakete sayılan oturumda özel tutar girilemez.")
+		return
+	}
 	if req.PaketModu == "ucretsiz" {
 		// Tamamı pakete sayılan oturumda tahsilat yoktur; yuvarlama/indirim anlamsızdır.
 		req.OdemeTipi = "paket"
@@ -111,6 +158,10 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IndirimKurus < 0 {
 		writeError(w, http.StatusBadRequest, "İndirim tutarı negatif olamaz.")
+		return
+	}
+	userID, ok := ozelTutarYetkisi(w, r, req.OzelTutarKurus)
+	if !ok {
 		return
 	}
 
@@ -245,6 +296,9 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		indirimKurus = tahsilTutar
 	}
 	tahsilTutar -= indirimKurus
+	if req.OzelTutarKurus != nil {
+		tahsilTutar, indirimKurus = ozelTutarHesapla(orijinalTutar, *req.OzelTutarKurus)
+	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE sessions SET
@@ -264,6 +318,12 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "oturum kapatılamadı", err)
 		return
+	}
+	if req.OzelTutarKurus != nil {
+		if err := ozelTutarAuditYaz(ctx, tx, userID, "sessions", id, orijinalTutar, *req.OzelTutarKurus); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "audit log yazılamadı", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -310,6 +370,10 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IndirimKurus < 0 {
 		writeError(w, http.StatusBadRequest, "İndirim tutarı negatif olamaz.")
+		return
+	}
+	userID, ok := ozelTutarYetkisi(w, r, req.OzelTutarKurus)
+	if !ok {
 		return
 	}
 
@@ -367,6 +431,9 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 		indirimKurus = tahsilTutar
 	}
 	tahsilTutar -= indirimKurus
+	if req.OzelTutarKurus != nil {
+		tahsilTutar, indirimKurus = ozelTutarHesapla(orijinalTutar, *req.OzelTutarKurus)
+	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE sessions SET
@@ -385,6 +452,12 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "erken ödeme kaydedilemedi", err)
 		return
+	}
+	if req.OzelTutarKurus != nil {
+		if err := ozelTutarAuditYaz(ctx, tx, userID, "sessions", id, orijinalTutar, *req.OzelTutarKurus); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "audit log yazılamadı", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

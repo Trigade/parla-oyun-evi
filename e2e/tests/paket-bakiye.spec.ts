@@ -76,6 +76,21 @@ test("1 saat kullanılıp 'Paketten Düş' ile kapatılınca bakiye 9 saate ve d
   await expect(page.getByRole("cell", { name: `${ad} Musteri` })).toHaveCount(0, { timeout: 10000 });
 });
 
+test("1 dakikadan kısa oturumda 'Paketten Düş' bilgi mesajı gösterir ve bakiye değişmez", async ({ page }) => {
+  const token = await api.adminToken();
+  const onceki = (await api.listCustomerPackages(token, musteriId))[0].kalan_dakika ?? 0;
+  await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+  await expect(page.getByRole("heading", { name: "Kasa Ekranı" })).toBeVisible();
+
+  await oturumAcVeSec(page, 0); // giriş zamanı geri çekilmez: 0 tam dakika
+  await page.getByRole("button", { name: "Paketten Düş (Ücretsiz)" }).click();
+  await expect(page.getByText(/1 dakikadan kısa sürdüğü için ücretsiz kapatıldı/)).toBeVisible();
+  await expect(page.getByRole("cell", { name: `${ad} Musteri` })).toHaveCount(0, { timeout: 10000 });
+
+  const [paket] = await api.listCustomerPackages(token, musteriId);
+  expect(paket.kalan_dakika ?? 0).toBe(onceki);
+});
+
 test("kalan bakiyeyi aşan oturumda 'Paketten Düş' devre dışıdır; 'Aşanı Tahsil Et: Nakit' bakiyeyi sıfırlar", async ({ page }) => {
   const token = await api.adminToken();
   await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
