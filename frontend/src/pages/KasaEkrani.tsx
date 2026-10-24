@@ -51,6 +51,7 @@ export default function KasaEkrani() {
   const [telefonKontrolEdiliyor, setTelefonKontrolEdiliyor] = useState(false);
   const [sorgulaniyor, setSorgulaniyor] = useState(false);
   const [hata, setHata] = useState<string | null>(null);
+  const [bilgi, setBilgi] = useState<string | null>(null);
 
   const [adAramaMetin, setAdAramaMetin] = useState("");
   const [adAramaSonuclari, setAdAramaSonuclari] = useState<CustomerListItem[]>([]);
@@ -296,9 +297,10 @@ export default function KasaEkrani() {
     paketModu: "" | "ucretsiz" | "asim" = ""
   ) {
     setHata(null);
+    setBilgi(null);
     setKapatiliyor(true);
     try {
-      await api.closeSession(
+      const sonuc = await api.closeSession(
         id,
         odemeTipi,
         paketModu === "ucretsiz" ? false : yuvarla,
@@ -306,6 +308,9 @@ export default function KasaEkrani() {
         paketModu,
         paketModu === "ucretsiz" ? undefined : ozelTutarKurus
       );
+      if (sonuc.silindi) {
+        setBilgi("Oturum 1 dakikadan kısa sürdüğü için ücretsiz kapatıldı (kayıt silindi); paketten düşülmedi ve ücret alınmadı.");
+      }
       seciliSessionSifirla();
       await refresh();
     } catch (e) {
@@ -436,6 +441,7 @@ export default function KasaEkrani() {
       <p className="muted" style={{ marginBottom: 20 }}>Müşteri giriş/çıkışını ve içeride geçen süreyi buradan yönetin.</p>
 
       {hata && <div className="alert alert--error">{hata}</div>}
+      {bilgi && <div className="alert alert--success">{bilgi}</div>}
 
       {gunAcik === false && (
         <div className="alert alert--error">

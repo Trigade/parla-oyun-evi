@@ -467,7 +467,7 @@ export const api = {
     paketModu: "" | "ucretsiz" | "asim" = "",
     ozelTutarKurus?: number // yalnızca yönetici: tek seferlik elle tutar
   ) =>
-    request(`/sessions/${id}/close`, {
+    request<{ silindi?: boolean }>(`/sessions/${id}/close`, {
       method: "POST",
       body: JSON.stringify({
         odeme_tipi,
