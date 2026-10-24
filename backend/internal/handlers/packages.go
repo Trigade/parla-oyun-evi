@@ -251,6 +251,8 @@ func (a *API) ListCustomerPackages(w http.ResponseWriter, r *http.Request) {
 type purchasePackageRequest struct {
 	PackageDefinitionID int64  `json:"package_definition_id"`
 	OdemeTipi           string `json:"odeme_tipi"`
+	// Yalnızca yönetici: paket ücreti yerine bu tutar tahsil edilir (tek seferlik).
+	OzelTutarKurus *int64 `json:"ozel_tutar_kurus"`
 }
 
 // PurchasePackage bir müşteriye paket tanımlar: haftalık gün, günlük dakika
@@ -279,6 +281,9 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.OdemeTipi != "nakit" && req.OdemeTipi != "kredi_karti" {
 		writeError(w, http.StatusBadRequest, "Ödeme tipi 'Nakit' veya 'Kredi Kartı' olmalıdır.")
+		return
+	}
+	if _, ok := ozelTutarYetkisi(w, r, req.OzelTutarKurus); !ok {
 		return
 	}
 
@@ -315,6 +320,11 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 		dakika = nil // abonelikte toplam/kalan dakika tutulmaz
 	}
 
+	tutarKurus := aylikUcretKurus
+	if req.OzelTutarKurus != nil {
+		tutarKurus = *req.OzelTutarKurus
+	}
+
 	var item customerPackageItem
 	var satinAlma, bitis time.Time
 	if err := tx.QueryRow(ctx, `
@@ -326,11 +336,17 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, odeme_tipi,
 			satin_alma_zamani, gecerlilik_bitis`,
 		customerID, req.PackageDefinitionID, paketAdi, grup, haftalikGun, gunlukDakika,
-		dakika, aylikUcretKurus, req.OdemeTipi, claims.UserID,
+		dakika, tutarKurus, req.OdemeTipi, claims.UserID,
 	).Scan(&item.ID, &item.Ad, &item.Grup, &item.HaftalikGun, &item.GunlukDakika,
 		&item.ToplamDakika, &item.KalanDakika, &item.TutarKurus, &item.OdemeTipi, &satinAlma, &bitis); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "paket satın alınamadı", err)
 		return
+	}
+	if req.OzelTutarKurus != nil {
+		if err := ozelTutarAuditYaz(ctx, tx, claims.UserID, "customer_packages", item.ID, aylikUcretKurus, tutarKurus); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "audit log yazılamadı", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

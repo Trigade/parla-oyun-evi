@@ -36,6 +36,7 @@ export default function SatinAlma() {
   const [paketler, setPaketler] = useState<PackageDefinition[]>([]);
   const [seciliPaketId, setSeciliPaketId] = useState<number | null>(null);
   const [odemeTipi, setOdemeTipi] = useState<"nakit" | "kredi_karti">("nakit");
+  const [ozelTutar, setOzelTutar] = useState("");
 
   const [musteriPaketleri, setMusteriPaketleri] = useState<CustomerPackage[]>([]);
   const [musteriPaketleriYukleniyor, setMusteriPaketleriYukleniyor] = useState(false);
@@ -107,6 +108,12 @@ export default function SatinAlma() {
   }
 
   const seciliPaket = paketler.find((p) => p.id === seciliPaketId) ?? null;
+  // Özel tutar yalnızca yöneticiye görünür; tek seferlik, paket tanımını değiştirmez.
+  const ozelTutarSayi = Number(ozelTutar.replace(",", "."));
+  const ozelTutarKurus =
+    isAdmin && ozelTutar.trim() !== "" && Number.isFinite(ozelTutarSayi) && ozelTutarSayi >= 0
+      ? Math.round(ozelTutarSayi * 100)
+      : undefined;
 
   async function satinAl() {
     if (!seciliMusteri || !seciliPaketId) return;
@@ -114,12 +121,13 @@ export default function SatinAlma() {
     setBasari(null);
     setSatinAliniyor(true);
     try {
-      const kayit = await api.purchasePackage(seciliMusteri.id, seciliPaketId, odemeTipi);
+      const kayit = await api.purchasePackage(seciliMusteri.id, seciliPaketId, odemeTipi, ozelTutarKurus);
       setBasari(
         `"${kayit.ad}" paketi ${seciliMusteri.ad} ${seciliMusteri.soyad} için tanımlandı. ` +
           `${formatKurus(kayit.tutar_kurus)} (${odemeTipiEtiketi(kayit.odeme_tipi)}) tahsil edildi, ` +
           `${kayit.gecerlilik_bitis} tarihine kadar geçerli.`
       );
+      setOzelTutar("");
       await musteriPaketleriYukle(seciliMusteri.id);
     } catch (e) {
       setHata((e as Error).message);
@@ -319,10 +327,28 @@ export default function SatinAlma() {
                     <option value="kredi_karti">Kredi Kartı</option>
                   </select>
                 </div>
+                {isAdmin && (
+                  <div className="field">
+                    <label htmlFor="paket-ozel-tutar">Özel Tutar (TL)</label>
+                    <input
+                      id="paket-ozel-tutar"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="Örn: 123,45"
+                      value={ozelTutar}
+                      onChange={(e) => setOzelTutar(e.target.value)}
+                      style={{ maxWidth: 140 }}
+                    />
+                  </div>
+                )}
                 <div className="field">
                   <label>Tahsil Edilecek</label>
                   <div className="stat-card__value" style={{ fontSize: 20 }}>
-                    {seciliPaket ? formatKurus(seciliPaket.aylik_ucret_kurus) : "—"}
+                    {ozelTutarKurus !== undefined
+                      ? formatKurus(ozelTutarKurus)
+                      : seciliPaket
+                        ? formatKurus(seciliPaket.aylik_ucret_kurus)
+                        : "—"}
                   </div>
                 </div>
                 <button onClick={satinAl} disabled={satinAliniyor || !seciliPaketId}>

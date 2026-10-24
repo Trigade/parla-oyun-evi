@@ -464,21 +464,34 @@ export const api = {
     odeme_tipi: "nakit" | "kredi_karti" | "paket",
     yuvarla: boolean,
     indirimKurus = 0,
-    paketModu: "" | "ucretsiz" | "asim" = ""
+    paketModu: "" | "ucretsiz" | "asim" = "",
+    ozelTutarKurus?: number // yalnızca yönetici: tek seferlik elle tutar
   ) =>
     request(`/sessions/${id}/close`, {
       method: "POST",
-      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus, paket_modu: paketModu }),
+      body: JSON.stringify({
+        odeme_tipi,
+        yuvarla,
+        indirim_kurus: indirimKurus,
+        paket_modu: paketModu,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
   payEarlySession: (
     id: number,
     odeme_tipi: "nakit" | "kredi_karti" | "paket",
     yuvarla: boolean,
-    indirimKurus = 0
+    indirimKurus = 0,
+    ozelTutarKurus?: number
   ) =>
     request(`/sessions/${id}/pay-early`, {
       method: "POST",
-      body: JSON.stringify({ odeme_tipi, yuvarla, indirim_kurus: indirimKurus }),
+      body: JSON.stringify({
+        odeme_tipi,
+        yuvarla,
+        indirim_kurus: indirimKurus,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
   checkOutSession: (id: number) => request(`/sessions/${id}/check-out`, { method: "POST" }),
   extendSessionDuration: (id: number, ekDakika: number) =>
@@ -604,10 +617,15 @@ export const api = {
   purchasePackage: (
     customerId: number,
     packageDefinitionId: number,
-    odemeTipi: "nakit" | "kredi_karti"
+    odemeTipi: "nakit" | "kredi_karti",
+    ozelTutarKurus?: number
   ) =>
     request<CustomerPackage>(`/customers/${customerId}/packages`, {
       method: "POST",
-      body: JSON.stringify({ package_definition_id: packageDefinitionId, odeme_tipi: odemeTipi }),
+      body: JSON.stringify({
+        package_definition_id: packageDefinitionId,
+        odeme_tipi: odemeTipi,
+        ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+      }),
     }),
 };

@@ -8,6 +8,7 @@ import {
   type PackageStatus,
   type PricingPolicy,
 } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 type Asama = "sorgu" | "bulundu" | "kayit_gerekli";
 type SorguTipi = "tc" | "telefon" | "ad";
@@ -65,6 +66,8 @@ export default function KasaEkrani() {
   const [indirimAcik, setIndirimAcik] = useState(false);
   const [indirimTipi, setIndirimTipi] = useState<"tutar" | "yuzde">("tutar");
   const [indirimDeger, setIndirimDeger] = useState("");
+  const { isAdmin } = useAuth();
+  const [ozelTutar, setOzelTutar] = useState("");
 
   const [paketDurumu, setPaketDurumu] = useState<PackageStatus | null>(null);
 
@@ -258,6 +261,7 @@ export default function KasaEkrani() {
     setIndirimAcik(false);
     setIndirimTipi("tutar");
     setIndirimDeger("");
+    setOzelTutar("");
     setPaketDurumu(null);
   }
 
@@ -299,7 +303,8 @@ export default function KasaEkrani() {
         odemeTipi,
         paketModu === "ucretsiz" ? false : yuvarla,
         paketModu === "ucretsiz" ? 0 : indirimKurus,
-        paketModu
+        paketModu,
+        paketModu === "ucretsiz" ? undefined : ozelTutarKurus
       );
       seciliSessionSifirla();
       await refresh();
@@ -317,7 +322,7 @@ export default function KasaEkrani() {
     setHata(null);
     setKapatiliyor(true);
     try {
-      await api.payEarlySession(id, odemeTipi, odemeTipi === "paket" ? false : yuvarla, odemeTipi === "paket" ? 0 : indirimKurus);
+      await api.payEarlySession(id, odemeTipi, odemeTipi === "paket" ? false : yuvarla, odemeTipi === "paket" ? 0 : indirimKurus, ozelTutarKurus);
       seciliSessionSifirla();
       await refresh();
     } catch (e) {
@@ -416,7 +421,14 @@ export default function KasaEkrani() {
         : Math.round(yuvarlanmisTutar * (indirimDegerSayi / 100));
     if (indirimKurus > yuvarlanmisTutar) indirimKurus = yuvarlanmisTutar;
   }
-  const tahminiTutar = yuvarlanmisTutar != null ? yuvarlanmisTutar - indirimKurus : null;
+  // Özel tutar (yalnızca yönetici): doluysa yuvarlama/indirim yok sayılır, tahsilat bu tutardır.
+  const ozelTutarSayi = Number(ozelTutar.replace(",", "."));
+  const ozelTutarKurus =
+    isAdmin && ozelTutar.trim() !== "" && Number.isFinite(ozelTutarSayi) && ozelTutarSayi >= 0
+      ? Math.round(ozelTutarSayi * 100)
+      : undefined;
+  const tahminiTutar =
+    ozelTutarKurus ?? (yuvarlanmisTutar != null ? yuvarlanmisTutar - indirimKurus : null);
 
   return (
     <div className="page">
@@ -854,10 +866,15 @@ export default function KasaEkrani() {
 
               <div className="field-row" style={{ marginTop: 16, alignItems: "center" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
-                  <input type="checkbox" checked={yuvarla} onChange={(e) => setYuvarla(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={yuvarla}
+                    disabled={ozelTutarKurus !== undefined}
+                    onChange={(e) => setYuvarla(e.target.checked)}
+                  />
                   Yuvarla (en yakın 10 TL'ye)
                 </label>
-                <button className="ghost" onClick={() => setIndirimAcik((v) => !v)}>
+                <button className="ghost" disabled={ozelTutarKurus !== undefined} onClick={() => setIndirimAcik((v) => !v)}>
                   {indirimAcik ? "İndirimi Kaldır" : "İndirim Uygula"}
                 </button>
               </div>
@@ -888,6 +905,26 @@ export default function KasaEkrani() {
                       %
                     </button>
                   </div>
+                </div>
+              )}
+
+              {isAdmin && (
+                <div className="field-row" style={{ marginTop: 8, alignItems: "center" }}>
+                  <div className="field" style={{ maxWidth: 180 }}>
+                    <label>Özel Tutar (TL)</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="Örn: 123,45"
+                      value={ozelTutar}
+                      onChange={(e) => setOzelTutar(e.target.value)}
+                    />
+                  </div>
+                  {ozelTutarKurus !== undefined && (
+                    <span className="muted" style={{ fontSize: 14 }}>
+                      Özel tutar uygulanıyor; normal ücret: {tahminiTutarHam != null ? formatKurus(tahminiTutarHam) : "—"}
+                    </span>
+                  )}
                 </div>
               )}
 
