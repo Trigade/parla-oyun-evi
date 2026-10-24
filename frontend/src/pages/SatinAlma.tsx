@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   api,
+  abonelikOzetiMetni,
   formatSureMetni,
   getIsAdmin,
   type CustomerListItem,
@@ -277,7 +278,7 @@ export default function SatinAlma() {
                   Aktif paket: <strong>{aktifPaket.ad}</strong> ·{" "}
                   {aktifPaket.tur === "bakiye"
                     ? `Kalan: ${formatSureMetni(aktifPaket.kalan_dakika ?? 0)} · ${formatKurus(aktifPaket.kalan_deger_kurus ?? 0)} değerinde`
-                    : hakMetni(aktifPaket)}{" "}
+                    : `${hakMetni(aktifPaket)} · ${abonelikOzetiMetni(aktifPaket)}`}{" "}
                   · {aktifPaket.gecerlilik_bitis} tarihine kadar
                 </span>
               ) : (

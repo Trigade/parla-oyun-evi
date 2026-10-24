@@ -279,7 +279,7 @@ export interface CustomerPackage {
 
 export async function createPackageDefinition(
   token: string,
-  data: { tur: "abonelik" | "bakiye"; ad: string; dakika?: number; aylik_ucret_kurus: number }
+  data: { tur: "abonelik" | "bakiye"; ad: string; dakika?: number; haftalik_gun?: number; gunluk_dakika?: number; aylik_ucret_kurus: number }
 ): Promise<{ id: number }> {
   return req("/package-definitions", { method: "POST", body: JSON.stringify(data) }, token);
 }

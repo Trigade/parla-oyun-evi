@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   api,
+  abonelikOzetiMetni,
   formatSureMetni,
   tierUcretiHesapla,
   type CustomerListItem,
@@ -820,11 +821,13 @@ export default function KasaEkrani() {
                       {formatSureMetni(paketDurumu?.toplam_dakika ?? 0)} · Geçerlilik: {paketDurumu?.gecerlilik_bitis}
                     </div>
                   ) : (
-                    <div>
-                      Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün ·
-                      Bugün kalan hak: {formatSureMetni(paketKalanGunlukDakika)} ·
-                      Geçerlilik: {paketDurumu?.gecerlilik_bitis}
-                    </div>
+                    <>
+                      <div style={{ fontWeight: 600 }}>{paketDurumu && abonelikOzetiMetni(paketDurumu)}</div>
+                      <div>
+                        Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün kullanıldı ·
+                        Geçerlilik: {paketDurumu?.gecerlilik_bitis}
+                      </div>
+                    </>
                   )}
                   {paketDurumu?.gun_hakki_doldu_mu && (
                     <div style={{ color: "var(--terracotta-dark)", fontWeight: 600, marginTop: 6 }}>

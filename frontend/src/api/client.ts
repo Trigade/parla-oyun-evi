@@ -384,6 +384,10 @@ export interface CustomerPackage {
   satin_alma_zamani: string;
   gecerlilik_bitis: string;
   suresi_dolmus_mu: boolean;
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
 }
 
 // Müşterinin aktif paketindeki güncel hak kullanımı (kasa ekranı için).
@@ -404,6 +408,26 @@ export interface PackageStatus {
   bugun_pakete_sayildi_mi: boolean;
   gun_hakki_doldu_mu: boolean;
   gecerlilik_bitis?: string;
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
+}
+
+// Abonelikte kalan hakkı tek satırda anlatır (kasa ve satın alma ekranları).
+export function abonelikOzetiMetni(p: {
+  bugun_kalan_dakika?: number;
+  bu_hafta_kalan_gun?: number;
+  bu_hafta_kalan_dakika?: number;
+  bitise_kalan_gun?: number;
+  gecerlilik_bitis?: string;
+}): string {
+  const [yil, ay, gun] = (p.gecerlilik_bitis ?? "").slice(0, 10).split("-");
+  return (
+    `Bugün kalan: ${formatSureMetni(p.bugun_kalan_dakika ?? 0)} · ` +
+    `Bu hafta kalan: ${p.bu_hafta_kalan_gun ?? 0} gün (toplam ${formatSureMetni(p.bu_hafta_kalan_dakika ?? 0)}) · ` +
+    `Paket bitişi: ${gun}.${ay}.${yil} (${p.bitise_kalan_gun ?? 0} gün kaldı)`
+  );
 }
 
 export const api = {
