@@ -50,7 +50,7 @@ test.describe("Fiyat Politikası", () => {
       const yeni = await api.getActivePricingPolicy(token);
       expect(yeni.tiers[0].tutar_kurus).toBe(7700);
     } finally {
-      await api.createPricingPolicy(token, orijinalTiers);
+      await api.createPricingPolicy(token, orijinalTiers, orijinal.yuvarlama_tolerans_dakika);
     }
   });
 });

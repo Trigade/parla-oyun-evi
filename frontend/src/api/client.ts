@@ -302,6 +302,7 @@ export interface PricingTier {
 export interface PricingPolicy {
   version_id: number;
   effective_from: string;
+  yuvarlama_tolerans_dakika: number;
   tiers: PricingTier[];
 }
 
@@ -314,9 +315,11 @@ export interface PricingTierInput {
 // Verilen dakikanın düştüğü bloğun ücretini bulur. Tanımlı en yüksek blok
 // (son bloğun bitişi) bir "tur" oluşturur; bunu aşan sürelerde ücret modüler
 // (döngüsel) hesaplanır — backend'deki tierUcretiniHesapla ile aynı mantık.
+// Tolerans: ücret max(1, dakika - tolerans) dakikanın ücretidir (dakika 0 ise 0).
 // Yalnızca canlı önizleme içindir, gerçek tutar sunucuda otoriter hesaplanır.
 export function tierUcretiHesapla(dakika: number, policy: PricingPolicy | null): number | null {
   if (!policy || policy.tiers.length === 0) return null;
+  if (dakika > 0) dakika = Math.max(1, dakika - policy.yuvarlama_tolerans_dakika);
   const sonTier = policy.tiers[policy.tiers.length - 1];
   const turDakika = sonTier.max_dakika;
 
@@ -562,10 +565,10 @@ export const api = {
     }),
   getActivePricingPolicy: () => request<PricingPolicy>("/pricing-tiers/active"),
   listPricingPolicies: () => request<PricingPolicy[]>("/pricing-tiers"),
-  createPricingPolicy: (tiers: PricingTierInput[]) =>
+  createPricingPolicy: (tiers: PricingTierInput[], yuvarlama_tolerans_dakika: number) =>
     request<PricingPolicy>("/pricing-tiers", {
       method: "POST",
-      body: JSON.stringify({ tiers }),
+      body: JSON.stringify({ tiers, yuvarlama_tolerans_dakika }),
     }),
   getCurrentBusinessDay: () => request<CurrentBusinessDayResponse>("/business-day/current"),
   startBusinessDay: () =>

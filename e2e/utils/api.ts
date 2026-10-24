@@ -260,12 +260,12 @@ export interface PricingTier {
   tutar_kurus: number;
 }
 
-export async function getActivePricingPolicy(token: string): Promise<{ version_id: number; tiers: PricingTier[] }> {
+export async function getActivePricingPolicy(token: string): Promise<{ version_id: number; yuvarlama_tolerans_dakika: number; tiers: PricingTier[] }> {
   return req("/pricing-tiers/active", {}, token);
 }
 
-export async function createPricingPolicy(token: string, tiers: PricingTier[]): Promise<{ version_id: number }> {
-  return req("/pricing-tiers", { method: "POST", body: JSON.stringify({ tiers }) }, token);
+export async function createPricingPolicy(token: string, tiers: PricingTier[], yuvarlama_tolerans_dakika?: number): Promise<{ version_id: number }> {
+  return req("/pricing-tiers", { method: "POST", body: JSON.stringify({ tiers, yuvarlama_tolerans_dakika }) }, token);
 }
 
 export interface CustomerPackage {

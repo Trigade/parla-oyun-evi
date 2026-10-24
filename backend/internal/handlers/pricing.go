@@ -132,13 +132,17 @@ type pricingTierItem struct {
 }
 
 type pricingPolicyItem struct {
-	VersionID     int64             `json:"version_id"`
-	EffectiveFrom string            `json:"effective_from"`
-	Tiers         []pricingTierItem `json:"tiers"`
+	VersionID     int64  `json:"version_id"`
+	EffectiveFrom string `json:"effective_from"`
+	// Bir blok bu kadar dakikaya kadar aşılırsa bir sonraki blok ücreti alınmaz.
+	YuvarlamaToleransDakika int               `json:"yuvarlama_tolerans_dakika"`
+	Tiers                   []pricingTierItem `json:"tiers"`
 }
 
+const varsayilanToleransDakika = 10
+
 // politikayiOku, verilen versiyon id'sine ait blokları sıralı olarak döner.
-func politikayiOku(ctx context.Context, q querier, versionID int64, effectiveFrom time.Time) (pricingPolicyItem, error) {
+func politikayiOku(ctx context.Context, q querier, versionID int64, effectiveFrom time.Time, tolerans int) (pricingPolicyItem, error) {
 	rows, err := q.Query(ctx, `
 		SELECT id, sira, min_dakika, max_dakika, tutar_kurus
 		FROM pricing_tiers WHERE version_id = $1 ORDER BY sira ASC`, versionID)
@@ -148,9 +152,10 @@ func politikayiOku(ctx context.Context, q querier, versionID int64, effectiveFro
 	defer rows.Close()
 
 	policy := pricingPolicyItem{
-		VersionID:     versionID,
-		EffectiveFrom: effectiveFrom.Format("2006-01-02 15:04:05"),
-		Tiers:         []pricingTierItem{},
+		VersionID:               versionID,
+		EffectiveFrom:           effectiveFrom.Format("2006-01-02 15:04:05"),
+		YuvarlamaToleransDakika: tolerans,
+		Tiers:                   []pricingTierItem{},
 	}
 	for rows.Next() {
 		var t pricingTierItem
@@ -166,15 +171,61 @@ func politikayiOku(ctx context.Context, q querier, versionID int64, effectiveFro
 }
 
 // aktifPolitikaVersiyonu, şu an geçerli fiyat politikası versiyonunun
-// id ve geçerlilik başlangıcını döner.
-func aktifPolitikaVersiyonu(ctx context.Context, q querier) (int64, time.Time, error) {
+// id, geçerlilik başlangıcı ve tolerans (dakika) değerini döner.
+func aktifPolitikaVersiyonu(ctx context.Context, q querier) (int64, time.Time, int, error) {
 	var versionID int64
 	var effectiveFrom time.Time
+	var tolerans int
 	err := q.QueryRow(ctx, `
-		SELECT id, effective_from FROM pricing_tier_versions
+		SELECT id, effective_from, yuvarlama_tolerans_dakika FROM pricing_tier_versions
 		WHERE effective_from <= now() ORDER BY effective_from DESC LIMIT 1`,
-	).Scan(&versionID, &effectiveFrom)
-	return versionID, effectiveFrom, err
+	).Scan(&versionID, &effectiveFrom, &tolerans)
+	return versionID, effectiveFrom, tolerans, err
+}
+
+type tierRow struct {
+	id                   int64
+	minDakika, maxDakika int64
+	tutar                int64
+}
+
+// tierUcretiSaf, DB'den bağımsız saf hesaplamadır. Tolerans: ücret,
+// max(1, dakika-tolerans) dakikanın ücretidir; blok sınırını tolerans kadar
+// aşan süre bir sonraki bloğa atlamaz (tur sınırları dahil). dakika 0 ise 0.
+// Frontend'deki tierUcretiHesapla (api/client.ts) ile birebir aynı olmalıdır.
+func tierUcretiSaf(tiers []tierRow, tolerans int, dakika int64) (tierID int64, tutarKurus int64, err error) {
+	if len(tiers) == 0 {
+		return 0, 0, fmt.Errorf("aktif fiyat politikasında blok tanımlı değil")
+	}
+	if dakika < 0 {
+		dakika = 0
+	}
+	if dakika > 0 {
+		dakika -= int64(tolerans)
+		if dakika < 1 {
+			dakika = 1
+		}
+	}
+
+	sonTier := tiers[len(tiers)-1]
+	turDakika := sonTier.maxDakika
+
+	kalanDakika := dakika
+	tamTurSayisi := int64(0)
+	if dakika > turDakika {
+		tamTurSayisi = dakika / turDakika
+		kalanDakika = dakika % turDakika
+	}
+
+	if kalanDakika == 0 {
+		return sonTier.id, tamTurSayisi * sonTier.tutar, nil
+	}
+	for _, t := range tiers {
+		if kalanDakika >= t.minDakika && kalanDakika <= t.maxDakika {
+			return t.id, tamTurSayisi*sonTier.tutar + t.tutar, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("süreye (%d dk) uygun bir fiyat bloğu bulunamadı", dakika)
 }
 
 // tierUcretiniHesapla, verilen dakika süresinin düştüğü fiyat bloğunu aktif
@@ -189,10 +240,7 @@ func aktifPolitikaVersiyonu(ctx context.Context, q querier) (int64, time.Time, e
 // iken 165 dk kalan müşteri 2 tam tur (2*90) + kalan 45 dk'nın bloğu (90) =
 // 270 öder.
 func tierUcretiniHesapla(ctx context.Context, q querier, dakika int64) (versionID int64, tierID int64, tutarKurus int64, err error) {
-	if dakika < 0 {
-		dakika = 0
-	}
-	versionID, _, err = aktifPolitikaVersiyonu(ctx, q)
+	versionID, _, tolerans, err := aktifPolitikaVersiyonu(ctx, q)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("aktif fiyat politikası bulunamadı: %w", err)
 	}
@@ -205,11 +253,6 @@ func tierUcretiniHesapla(ctx context.Context, q querier, dakika int64) (versionI
 	}
 	defer rows.Close()
 
-	type tierRow struct {
-		id                   int64
-		minDakika, maxDakika int64
-		tutar                int64
-	}
 	var tiers []tierRow
 	for rows.Next() {
 		var t tierRow
@@ -221,40 +264,22 @@ func tierUcretiniHesapla(ctx context.Context, q querier, dakika int64) (versionI
 	if err = rows.Err(); err != nil {
 		return 0, 0, 0, err
 	}
-	if len(tiers) == 0 {
-		return 0, 0, 0, fmt.Errorf("aktif fiyat politikasında blok tanımlı değil")
+	tierID, tutarKurus, err = tierUcretiSaf(tiers, tolerans, dakika)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-
-	sonTier := tiers[len(tiers)-1]
-	turDakika := sonTier.maxDakika
-
-	kalanDakika := dakika
-	tamTurSayisi := int64(0)
-	if dakika > turDakika {
-		tamTurSayisi = dakika / turDakika
-		kalanDakika = dakika % turDakika
-	}
-
-	if kalanDakika == 0 {
-		return versionID, sonTier.id, tamTurSayisi * sonTier.tutar, nil
-	}
-	for _, t := range tiers {
-		if kalanDakika >= t.minDakika && kalanDakika <= t.maxDakika {
-			return versionID, t.id, tamTurSayisi*sonTier.tutar + t.tutar, nil
-		}
-	}
-	return 0, 0, 0, fmt.Errorf("süreye (%d dk) uygun bir fiyat bloğu bulunamadı", dakika)
+	return versionID, tierID, tutarKurus, nil
 }
 
 // GetActivePricingPolicy şu an geçerli blok fiyat politikasını döner. Kasa
 // ekranındaki canlı tutar önizlemesi bunu kullanır.
 func (a *API) GetActivePricingPolicy(w http.ResponseWriter, r *http.Request) {
-	versionID, effectiveFrom, err := aktifPolitikaVersiyonu(r.Context(), a.DB)
+	versionID, effectiveFrom, tolerans, err := aktifPolitikaVersiyonu(r.Context(), a.DB)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Aktif bir fiyat politikası tanımlı değil, lütfen yöneticinize bildirin.")
 		return
 	}
-	policy, err := politikayiOku(r.Context(), a.DB, versionID, effectiveFrom)
+	policy, err := politikayiOku(r.Context(), a.DB, versionID, effectiveFrom, tolerans)
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "fiyat politikası alınamadı", err)
 		return
@@ -266,7 +291,7 @@ func (a *API) GetActivePricingPolicy(w http.ResponseWriter, r *http.Request) {
 // geçmişini, en yeniden en eskiye doğru döner. Sadece yönetici erişebilir.
 func (a *API) ListPricingTierVersions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT id, effective_from FROM pricing_tier_versions ORDER BY effective_from DESC`)
+		SELECT id, effective_from, yuvarlama_tolerans_dakika FROM pricing_tier_versions ORDER BY effective_from DESC`)
 	if err != nil {
 		writeServerError(w, http.StatusInternalServerError, "fiyat politikaları alınamadı", err)
 		return
@@ -274,11 +299,12 @@ func (a *API) ListPricingTierVersions(w http.ResponseWriter, r *http.Request) {
 	type versionRow struct {
 		id            int64
 		effectiveFrom time.Time
+		tolerans      int
 	}
 	var versions []versionRow
 	for rows.Next() {
 		var v versionRow
-		if err := rows.Scan(&v.id, &v.effectiveFrom); err != nil {
+		if err := rows.Scan(&v.id, &v.effectiveFrom, &v.tolerans); err != nil {
 			rows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
@@ -289,7 +315,7 @@ func (a *API) ListPricingTierVersions(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]pricingPolicyItem, 0, len(versions))
 	for _, v := range versions {
-		policy, err := politikayiOku(r.Context(), a.DB, v.id, v.effectiveFrom)
+		policy, err := politikayiOku(r.Context(), a.DB, v.id, v.effectiveFrom, v.tolerans)
 		if err != nil {
 			writeServerError(w, http.StatusInternalServerError, "fiyat politikası alınamadı", err)
 			return
@@ -306,7 +332,8 @@ type createPricingTierRequest struct {
 }
 
 type createPricingPolicyRequest struct {
-	Tiers []createPricingTierRequest `json:"tiers"`
+	YuvarlamaToleransDakika *int                       `json:"yuvarlama_tolerans_dakika"`
+	Tiers                   []createPricingTierRequest `json:"tiers"`
 }
 
 // CreatePricingTierVersion yeni bir blok fiyat politikası (tiers seti) ekler.
@@ -372,6 +399,15 @@ func (a *API) CreatePricingTierVersion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	tolerans := varsayilanToleransDakika
+	if req.YuvarlamaToleransDakika != nil {
+		tolerans = *req.YuvarlamaToleransDakika
+	}
+	if tolerans < 0 || tolerans > 30 {
+		writeError(w, http.StatusBadRequest, "Tolerans 0 ile 30 dakika arasında olmalıdır.")
+		return
+	}
+
 	ctx := r.Context()
 	tx, err := a.DB.Begin(ctx)
 	if err != nil {
@@ -383,17 +419,18 @@ func (a *API) CreatePricingTierVersion(w http.ResponseWriter, r *http.Request) {
 	var versionID int64
 	var effectiveFrom time.Time
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO pricing_tier_versions (created_by) VALUES ($1) RETURNING id, effective_from`,
-		claims.UserID,
+		`INSERT INTO pricing_tier_versions (created_by, yuvarlama_tolerans_dakika) VALUES ($1, $2) RETURNING id, effective_from`,
+		claims.UserID, tolerans,
 	).Scan(&versionID, &effectiveFrom); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "fiyat politikası oluşturulamadı", err)
 		return
 	}
 
 	result := pricingPolicyItem{
-		VersionID:     versionID,
-		EffectiveFrom: effectiveFrom.Format("2006-01-02 15:04:05"),
-		Tiers:         make([]pricingTierItem, 0, len(req.Tiers)),
+		VersionID:               versionID,
+		EffectiveFrom:           effectiveFrom.Format("2006-01-02 15:04:05"),
+		YuvarlamaToleransDakika: tolerans,
+		Tiers:                   make([]pricingTierItem, 0, len(req.Tiers)),
 	}
 	for i, t := range req.Tiers {
 		var id int64
