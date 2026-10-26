@@ -90,8 +90,13 @@ Write-Host "--- Son 20 kayit ---"
 Write-Host $son.Cikti
 
 # --- CSV ------------------------------------------------------------------
-$csvSorgu = "COPY (SELECT to_char(l.zaman AT TIME ZONE 'Europe/Istanbul', 'YYYY-MM-DD HH24:MI:SS') AS zaman, COALESCE(u.username, l.kullanici_adi) AS kullanici, " +
-    "l.yontem || ' ' || l.yol AS islem, l.gercek_yol, l.sonuc, l.durum_kodu, l.mesaj, l.ip, l.sure_ms, l.detay $kaynak ORDER BY l.zaman) TO STDOUT WITH CSV HEADER"
+# CSV/formul enjeksiyonu: =, +, -, @, sekme veya CR ile baslayan metin hucrelerinin basina ' konur.
+function Guvenli([string]$kolon) {
+    return "(CASE WHEN $kolon ~ '^[=+\-@\t\r]' THEN '''' || $kolon ELSE $kolon END)"
+}
+$csvSorgu = "COPY (SELECT to_char(l.zaman AT TIME ZONE 'Europe/Istanbul', 'YYYY-MM-DD HH24:MI:SS') AS zaman, $(Guvenli "COALESCE(u.username, l.kullanici_adi)") AS kullanici, " +
+    "$(Guvenli "l.yontem || ' ' || l.yol") AS islem, $(Guvenli "l.gercek_yol") AS gercek_yol, $(Guvenli "l.sonuc") AS sonuc, l.durum_kodu, $(Guvenli "l.mesaj") AS mesaj, $(Guvenli "l.ip") AS ip, l.sure_ms, $(Guvenli "l.detay::text") AS detay " +
+    "$kaynak ORDER BY l.zaman) TO STDOUT WITH CSV HEADER"
 $csv = Psql @() $csvSorgu
 if ($csv.Kod -ne 0) { Write-Host "CSV olusturulamadi:"; Write-Host $csv.Cikti; exit 1 }
 

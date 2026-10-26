@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +68,22 @@ func TestIslemDetay(t *testing.T) {
 	islemDetay(r, map[string]any{"b": 2})
 	if len(b.detay) != 2 {
 		t.Errorf("detay: %v", b.detay)
+	}
+}
+
+func TestGirisKullaniciAdi(t *testing.T) {
+	for girdi, beklenen := range map[string]string{
+		"kasiyer1":                   "kasiyer1",
+		"a.b_c-d":                    "a.b_c-d",
+		`=HYPERLINK("http://x","t")`: "(gecersiz)",
+		"@SUM(A1)":                   "(gecersiz)",
+		"":                           "(gecersiz)",
+		"a b":                        "(gecersiz)",
+		strings.Repeat("a", 65):      "(gecersiz)",
+		strings.Repeat("a", 64):      strings.Repeat("a", 64),
+	} {
+		if got := girisKullaniciAdi(girdi); got != beklenen {
+			t.Errorf("%q: %q, beklenen %q", girdi, got, beklenen)
+		}
 	}
 }

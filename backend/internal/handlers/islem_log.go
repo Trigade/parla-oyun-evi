@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -90,6 +91,17 @@ func maskeliYol(yol string) string {
 		}
 	}
 	return strings.Join(parcalar, "/")
+}
+
+var gecerliKullaniciAdi = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+// girisKullaniciAdi, kimlik doğrulamasız gelen kullanıcı adını yalnızca güvenli
+// karakterlerse olduğu gibi döner; aksi halde (ör. CSV/formül enjeksiyonu) "(gecersiz)".
+func girisKullaniciAdi(s string) string {
+	if gecerliKullaniciAdi.MatchString(s) {
+		return s
+	}
+	return "(gecersiz)"
 }
 
 // hataMetni, >=400 yanıt gövdesindeki {"hata": "..."} alanını döner.
