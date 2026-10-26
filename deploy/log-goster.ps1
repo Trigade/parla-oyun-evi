@@ -92,7 +92,7 @@ Write-Host $son.Cikti
 # --- CSV ------------------------------------------------------------------
 # CSV/formul enjeksiyonu: =, +, -, @, sekme veya CR ile baslayan metin hucrelerinin basina ' konur.
 function Guvenli([string]$kolon) {
-    return "(CASE WHEN $kolon ~ '^[=+\-@\t\r]' THEN '''' || $kolon ELSE $kolon END)"
+    return "(CASE WHEN $kolon ~ '^([[:space:]]*[=+\-@]|[\t\r])' THEN '''' || $kolon ELSE $kolon END)"
 }
 $csvSorgu = "COPY (SELECT to_char(l.zaman AT TIME ZONE 'Europe/Istanbul', 'YYYY-MM-DD HH24:MI:SS') AS zaman, $(Guvenli "COALESCE(u.username, l.kullanici_adi)") AS kullanici, " +
     "$(Guvenli "l.yontem || ' ' || l.yol") AS islem, $(Guvenli "l.gercek_yol") AS gercek_yol, $(Guvenli "l.sonuc") AS sonuc, l.durum_kodu, $(Guvenli "l.mesaj") AS mesaj, $(Guvenli "l.ip") AS ip, l.sure_ms, $(Guvenli "l.detay::text") AS detay " +
