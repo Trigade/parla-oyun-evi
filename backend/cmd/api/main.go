@@ -242,6 +242,7 @@ func main() {
 	})
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(api.IslemLog)
 		r.Get("/health", api.Health)
 		r.Post("/auth/login", api.Login)
 		// TOTP kurulum/doğrulama uçları kendi kısa ömürlü, amaca özel
@@ -262,6 +263,8 @@ func main() {
 			r.Post("/sessions/{id}/pay-early", api.PayEarlySession)
 			r.Post("/sessions/{id}/check-out", api.CheckOutSession)
 			r.Post("/sessions/{id}/extend-duration", api.ExtendSessionDuration)
+			// Salt okunur durum bilgisi; kasa ekranı "gün başlatılmadı" uyarısı için herkese açık.
+			r.Get("/business-day/current", api.GetCurrentBusinessDay)
 			r.Get("/pricing-rules/active", api.GetActivePricingRule)
 			r.Get("/pricing-tiers/active", api.GetActivePricingPolicy)
 			r.Get("/customers/by-tc/{tc}", api.LookupCustomerByTC)
@@ -273,7 +276,6 @@ func main() {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermGunSonu))
 				r.Post("/sessions/{id}/manual-close", api.ManualCloseSession)
-				r.Get("/business-day/current", api.GetCurrentBusinessDay)
 				r.Post("/business-day/start", api.StartBusinessDay)
 				r.Post("/business-day/{id}/end", api.EndBusinessDay)
 			})
@@ -348,6 +350,7 @@ func main() {
 	// (ör. bir ödeme kapatma) kesilmeden tamamlanır, sonra sunucu kapanır.
 	stopCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go api.IslemLogTemizlik(stopCtx)
 	kapandi := make(chan struct{})
 	go func() {
 		defer close(kapandi)

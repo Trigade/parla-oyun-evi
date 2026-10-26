@@ -187,13 +187,14 @@ func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var customer models.Customer
+	var yeniKayit bool
 	err := a.DB.QueryRow(ctx,
 		`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad,
 			telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
-		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at`,
+		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
 		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon,
-	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
+	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt, &yeniKayit)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "Bu TC kimlik no veya telefon numarası başka bir müşteriye kayıtlı.")
@@ -203,6 +204,7 @@ func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"customer_id": customer.ID, "musteri": customer.Ad + " " + customer.Soyad, "tc": maskele(customer.TCKimlikNo), "yeni_kayit": yeniKayit})
 	writeJSON(w, http.StatusCreated, customer)
 }
 
@@ -272,12 +274,13 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var customer models.Customer
+	var yeniKayit bool
 	err = tx.QueryRow(ctx,
 		`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad, telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
-		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at`,
+		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
 		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon,
-	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
+	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt, &yeniKayit)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			// Silinmiş kaydı geri getirirken telefon başka aktif müşteriye verilmiş olabilir.
@@ -288,6 +291,7 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"customer_id": customer.ID, "musteri": customer.Ad + " " + customer.Soyad, "tc": maskele(customer.TCKimlikNo), "yeni_kayit": yeniKayit, "sure_secimi_dakika": req.SureSecimiDakika})
 	var existingOpenID int64
 	err = tx.QueryRow(ctx,
 		`SELECT id FROM sessions WHERE customer_id = $1 AND durum = 'acik' LIMIT 1`,
@@ -320,6 +324,7 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"session_id": session.ID})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"musteri": customer,
 		"oturum":  session,
@@ -398,6 +403,12 @@ func (a *API) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		veliTelefon = &req.VeliTelefon
 	}
 
+	islemDetay(r, map[string]any{"customer_id": id})
+	var eski models.Customer
+	eskiVar := a.DB.QueryRow(ctx,
+		`SELECT tc_kimlik_no, ad, soyad, telefon, veli_telefon FROM customers WHERE id = $1`, id,
+	).Scan(&eski.TCKimlikNo, &eski.Ad, &eski.Soyad, &eski.Telefon, &eski.VeliTelefon) == nil
+
 	var customer models.Customer
 	err = a.DB.QueryRow(ctx,
 		`UPDATE customers SET tc_kimlik_no = $1, ad = $2, soyad = $3, telefon = $4, veli_telefon = $5
@@ -414,6 +425,22 @@ func (a *API) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	degisen := map[string]any{}
+	if eskiVar {
+		if eski.TCKimlikNo != customer.TCKimlikNo {
+			degisen["tc"] = maskele(eski.TCKimlikNo) + " -> " + maskele(customer.TCKimlikNo)
+		}
+		if eski.Ad != customer.Ad || eski.Soyad != customer.Soyad {
+			degisen["ad_soyad"] = eski.Ad + " " + eski.Soyad + " -> " + customer.Ad + " " + customer.Soyad
+		}
+		if eski.Telefon != customer.Telefon {
+			degisen["telefon"] = maskele(eski.Telefon) + " -> " + maskele(customer.Telefon)
+		}
+		if metin(eski.VeliTelefon) != metin(customer.VeliTelefon) {
+			degisen["veli_telefon"] = maskele(metin(eski.VeliTelefon)) + " -> " + maskele(metin(customer.VeliTelefon))
+		}
+	}
+	islemDetay(r, map[string]any{"degisen_alanlar": degisen})
 	writeJSON(w, http.StatusOK, customer)
 }
 
@@ -429,6 +456,7 @@ func (a *API) DeleteCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"customer_id": id})
 	var acikOturumID int64
 	err = a.DB.QueryRow(r.Context(),
 		`SELECT id FROM sessions WHERE customer_id = $1 AND durum = 'acik'`, id,
@@ -587,4 +615,12 @@ func (a *API) GetCustomerSessions(w http.ResponseWriter, r *http.Request) {
 		result = append(result, item)
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// metin, boş olabilen metin alanını düz metne çevirir (nil → "").
+func metin(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

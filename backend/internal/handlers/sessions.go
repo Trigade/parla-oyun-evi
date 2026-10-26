@@ -183,6 +183,7 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
+	islemDetay(r, map[string]any{"session_id": id, "customer_id": customerID, "paket_modu": req.PaketModu, "odeme_tipi": req.OdemeTipi})
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
@@ -209,6 +210,7 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "İşlem tamamlanamadı, lütfen tekrar deneyin.")
 			return
 		}
+		islemDetay(r, map[string]any{"silindi": true, "toplam_dakika": 0, "paketten_dusulmedi": true})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":                   id,
 			"toplam_dakika":        int64(0),
@@ -250,6 +252,7 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			}
 			var asiyor bool
 			paketDusulen, ucretlendirilecekDakika, asiyor = bakiyedenDus(toplamDakika, durum.KalanDakika)
+			islemDetay(r, map[string]any{"customer_package_id": durum.CustomerPackageID, "paket_turu": "bakiye", "kalan_dakika_once": durum.KalanDakika})
 			if asiyor && req.PaketModu == "ucretsiz" {
 				writeError(w, http.StatusConflict, "Oturum süresi paketin kalan bakiyesini aşıyor. Aşan kısmı tahsil etmek için 'Aşanı Tahsil Et' seçeneğini kullanın.")
 				return
@@ -262,6 +265,7 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+			islemDetay(r, map[string]any{"kalan_dakika_sonra": durum.KalanDakika - paketDusulen})
 		} else if req.PaketModu == "ucretsiz" {
 			paketDusulen = toplamDakika
 			ucretlendirilecekDakika = 0
@@ -272,6 +276,19 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			}
 			ucretlendirilecekDakika = toplamDakika - paketDusulen
 		}
+		if durum.Tur == "abonelik" {
+			gunSonra := durum.BuHaftaKullanilanGun
+			if !durum.BugunPaketeSayildiMi {
+				gunSonra++ // bu oturum günün ilk paket kullanımıdır
+			}
+			islemDetay(r, map[string]any{
+				"customer_package_id": durum.CustomerPackageID, "paket_turu": "abonelik",
+				"bugun_kullanilan_dakika_once": durum.BugunKullanilanDakika, "bugun_kullanilan_dakika_sonra": durum.BugunKullanilanDakika + paketDusulen,
+				"hafta_kullanilan_gun_once": durum.BuHaftaKullanilanGun, "hafta_kullanilan_gun_sonra": gunSonra,
+				"kalan_gunluk_dakika_once": durum.KalanGunlukDakika,
+			})
+		}
+		islemDetay(r, map[string]any{"paketten_dusulen_dakika": paketDusulen, "ucretlendirilen_dakika": ucretlendirilecekDakika})
 	}
 
 	var orijinalTutar int64
@@ -331,6 +348,10 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"toplam_dakika": toplamDakika, "orijinal_tutar_kurus": orijinalTutar, "tahsil_tutar_kurus": tahsilTutar, "indirim_kurus": indirimKurus})
+	if req.OzelTutarKurus != nil {
+		islemDetay(r, map[string]any{"ozel_tutar_kurus": *req.OzelTutarKurus})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                      id,
 		"toplam_dakika":           toplamDakika,
@@ -395,6 +416,7 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
+	islemDetay(r, map[string]any{"session_id": id, "customer_id": customerID, "odeme_tipi": req.OdemeTipi})
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
@@ -465,6 +487,10 @@ func (a *API) PayEarlySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"sure_secimi_dakika": toplamDakika, "orijinal_tutar_kurus": orijinalTutar, "tahsil_tutar_kurus": tahsilTutar, "indirim_kurus": indirimKurus})
+	if req.OzelTutarKurus != nil {
+		islemDetay(r, map[string]any{"ozel_tutar_kurus": *req.OzelTutarKurus})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                      id,
 		"toplam_dakika":           toplamDakika,
@@ -498,13 +524,15 @@ func (a *API) CheckOutSession(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	var durum string
+	var customerID int64
 	var onOdemeYapildiMi bool
 	if err := tx.QueryRow(ctx,
-		`SELECT durum, on_odeme_yapildi_mi FROM sessions WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&durum, &onOdemeYapildiMi); err != nil {
+		`SELECT durum, customer_id, on_odeme_yapildi_mi FROM sessions WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&durum, &customerID, &onOdemeYapildiMi); err != nil {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
+	islemDetay(r, map[string]any{"session_id": id, "customer_id": customerID})
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
@@ -567,14 +595,16 @@ func (a *API) ExtendSessionDuration(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	var durum string
+	var customerID int64
 	var sureSecimiDakika *int64
 	var onOdemeYapildiMi bool
 	if err := tx.QueryRow(ctx,
-		`SELECT durum, sure_secimi_dakika, on_odeme_yapildi_mi FROM sessions WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&durum, &sureSecimiDakika, &onOdemeYapildiMi); err != nil {
+		`SELECT durum, customer_id, sure_secimi_dakika, on_odeme_yapildi_mi FROM sessions WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&durum, &customerID, &sureSecimiDakika, &onOdemeYapildiMi); err != nil {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
+	islemDetay(r, map[string]any{"session_id": id, "customer_id": customerID, "ek_dakika": req.EkDakika})
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
@@ -601,6 +631,7 @@ func (a *API) ExtendSessionDuration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"sure_once_dakika": *sureSecimiDakika, "sure_sonra_dakika": yeniSure})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "sure_secimi_dakika": yeniSure})
 }
 
@@ -655,6 +686,7 @@ func (a *API) ManualCloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "oturum bulunamadı")
 		return
 	}
+	islemDetay(r, map[string]any{"session_id": id, "customer_id": customerID, "odeme_tipi": req.OdemeTipi, "cikis_zamani": req.CikisZamani})
 	if durum != "acik" {
 		writeError(w, http.StatusConflict, "oturum zaten kapalı veya iptal edilmiş")
 		return
@@ -696,6 +728,7 @@ func (a *API) ManualCloseSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "İşlem tamamlanamadı, lütfen tekrar deneyin.")
 			return
 		}
+		islemDetay(r, map[string]any{"on_odeme_yapildi_mi": true})
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "manuel_kapatildi": true, "on_odeme_yapildi_mi": true})
 		return
 	}
@@ -748,6 +781,7 @@ func (a *API) ManualCloseSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	islemDetay(r, map[string]any{"toplam_dakika": toplamDakika, "orijinal_tutar_kurus": orijinalTutar, "tahsil_tutar_kurus": tahsilTutar})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                   id,
 		"toplam_dakika":        toplamDakika,
