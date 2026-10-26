@@ -160,6 +160,35 @@ Kayıtlar: `deploy\guncelleme.log`. Güncelleme komutları `docker-compose.auto.
 dosyasını kullanır; bu dosya `docker-compose.prod.yml` ile aynı proje adını ve
 aynı veritabanı volume'ünü kullandığı için veri taşımaya gerek yoktur.
 
+## 9. İşlem kayıtları (yalnızca geliştirici)
+
+Uygulama, hangi işlemin yapıldığını ve hangisinin yapılamadığını (reddedildi /
+hata, nedeniyle birlikte) veritabanındaki `islem_log` tablosuna yazar. Kayıtlar
+uygulamada ve API'de **görünmez**; okuma ucu yoktur.
+
+- **Kaydedilir:** GET dışındaki tüm istekler, hata veren GET'ler, rapor/müşteri
+  PDF dışa aktarımları. Her kayıtta zaman, kullanıcı, işlem, sonuç
+  (`yapildi` / `reddedildi` / `hata`), durum kodu, hata mesajı, IP, süre.
+  Müşteri, oturum (giriş/çıkış/erken ödeme/süre uzatma/elle kapatma), paket
+  satın alma ve paketten/bakiyeden düşmeler için iş ayrıntısı da (`detay`;
+  ör. kalan dakika önce/sonra) yazılır.
+- **Kaydedilmez:** şifre, istek gövdesi, tam TC/telefon (yolda ve ayrıntıda
+  maskelenir: ilk 3 ve son 2 hane). Giriş denemesinde yalnızca kullanıcı adı yazılır.
+- **Saklama:** 365 gün; eski kayıtlar açılışta ve günde bir silinir.
+- **Okuma:** iş bilgisayarında proje klasöründe:
+  ```powershell
+  .\deploy\log-goster.ps1                                   # son 7 gün
+  .\deploy\log-goster.ps1 -Gun 30 -Sadece reddedildi        # veya: hata
+  .\deploy\log-goster.ps1 -Baslangic 2026-10-01 -Bitis 2026-10-26
+  .\deploy\log-goster.ps1 -Kullanici kasiyer1
+  .\deploy\log-goster.ps1 -Musteri 42                       # tek müşterinin geçmişi
+  ```
+  Ekrana özet yazılır; tam kayıt `deploy\loglar\islem_log_<tarih>.csv` dosyasına
+  (Excel'de açılır) yazılır.
+
+Not: kayıtlar uygulamada görünmez, ancak bilgisayarın/veritabanının sahibi
+teknik olarak okuyabilir ve silebilir.
+
 ## Ortam değişkenleri (app)
 
 | Değişken | Açıklama |

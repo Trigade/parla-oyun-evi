@@ -21,3 +21,6 @@ deploy/guncelleme.log
 # Test çıktıları
 e2e/playwright-report/
 e2e/test-results/
+
+# Gelistirici islem kayitlari disa aktarimi
+deploy/loglar/

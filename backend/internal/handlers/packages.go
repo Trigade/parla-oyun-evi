@@ -414,6 +414,21 @@ func (a *API) PurchasePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tur := "abonelik"
+	if haftalikGun == nil {
+		tur = "bakiye"
+	}
+	islemDetay(r, map[string]any{
+		"customer_id": customerID, "package_definition_id": req.PackageDefinitionID, "customer_package_id": item.ID,
+		"paket_adi": paketAdi, "paket_turu": tur, "tutar_kurus": tutarKurus, "odeme_tipi": req.OdemeTipi,
+		"gecerlilik_bitis": bitis.Format("2006-01-02 15:04"),
+	})
+	if tur == "bakiye" {
+		islemDetay(r, map[string]any{"toplam_dakika": item.ToplamDakika})
+	}
+	if req.OzelTutarKurus != nil {
+		islemDetay(r, map[string]any{"ozel_tutar_kurus": *req.OzelTutarKurus, "normal_tutar_kurus": aylikUcretKurus})
+	}
 	item.doldur()
 	item.SatinAlmaZamani = satinAlma.Format("2006-01-02 15:04")
 	item.GecerlilikBitis = bitis.Format("2006-01-02 15:04")

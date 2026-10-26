@@ -1,1 +1,1 @@
-export const SURUM = "V0.7.4";
+export const SURUM = "V0.7.5";
