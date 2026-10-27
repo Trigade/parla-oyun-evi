@@ -10,6 +10,7 @@ import SatinAlma from "./pages/SatinAlma";
 import Kullanicilar from "./pages/Kullanicilar";
 import FiyatPolitikasi from "./pages/FiyatPolitikasi";
 import Login from "./pages/Login";
+import TemaButonu from "./components/TemaButonu";
 import { SURUM } from "./surum";
 
 function NavLink({ to, children }: { to: string; children: ReactNode }) {
@@ -28,10 +29,14 @@ function Nav() {
   return (
     <nav className="topnav">
       <Link to="/" className="topnav__brand">
-        <img src="/logo.jpeg" alt="Parla Oyun Evi" className="topnav__logo" />
+        <span className="logo-disc topnav__logo">
+          <img src="/parla-tabela.jpg" alt="Parla Oyun Evi" />
+        </span>
         <span className="topnav__title">
           Parla Oyun Evi
-          <small>Süre Takip &amp; Adisyon · {SURUM}</small>
+          <small>
+            Süre Takip &amp; Adisyon <span className="surum-pill">{SURUM}</span>
+          </small>
         </span>
       </Link>
       <NavLink to="/">Kasa Ekranı</NavLink>
@@ -42,6 +47,7 @@ function Nav() {
       {isAdmin && <NavLink to="/kullanicilar">Kullanıcı Yönetimi</NavLink>}
       {isAdmin && <NavLink to="/fiyat-politikasi">Fiyat Politikası</NavLink>}
       <button className="ghost" onClick={logout}>Çıkış Yap</button>
+      <TemaButonu />
     </nav>
   );
 }

@@ -240,6 +240,8 @@ export interface CustomerListItem {
   acik_oturum_var: boolean;
   // Müşterinin süresi dolmamış aboneliğinin adı; paketi yoksa gelmez.
   aktif_paket?: string;
+  // Aktif paket yoksa null; kasa paket durumuyla aynı alanlar.
+  aktif_paket_durumu: PackageStatus | null;
 }
 
 export interface CustomerSession {

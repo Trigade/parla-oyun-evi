@@ -156,8 +156,7 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	// Rapor, oturumları ödemenin alındığı ana göre filtreler: erken ödemede
 	// bu an on_odeme_zamani'dir, diğerlerinde çıkış anı.
 	rows, err := tx.Query(ctx, `
-		SELECT c.ad, c.soyad, s.giris_zamani, s.cikis_zamani, s.toplam_dakika,
-			s.tahsil_tutar_kurus, s.indirim_kurus, s.odeme_tipi, s.manuel_kapatildi, s.on_odeme_yapildi_mi
+		SELECT c.ad, c.soyad, `+oturumRaporKolonlari+`
 		FROM sessions s
 		JOIN customers c ON c.id = s.customer_id
 		WHERE s.durum = 'kapali'
@@ -172,65 +171,19 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tableRows := [][]string{}
-	var toplamKurus, nakitKurus, kartKurus, toplamIndirimKurus, erkenOdemeKurus int64
-	var nakitSayisi, kartSayisi, paketSayisi, erkenOdemeSayisi, oturumSayisi int64
-	var paketSatisKurus, paketSatisSayisi int64
+	var toplam raporToplamlari
 	for rows.Next() {
 		var ad, soyad string
-		var giris, cikis time.Time
-		var dakika, tutar, indirim int64
-		var odemeTipi string
-		var manuelKapatildi, erkenOdeme bool
-		if err := rows.Scan(&ad, &soyad, &giris, &cikis, &dakika, &tutar, &indirim, &odemeTipi, &manuelKapatildi, &erkenOdeme); err != nil {
+		var o oturumKaydi
+		if err := o.scan(rows, &ad, &soyad); err != nil {
 			rows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-		kapatmaSekli := "Normal"
-		switch {
-		case manuelKapatildi:
-			kapatmaSekli = "Elle Kapatıldı"
-		case erkenOdeme:
-			kapatmaSekli = "Erken Ödeme"
-		}
-		odemeEtiket := "Nakit"
-		switch odemeTipi {
-		case "kredi_karti":
-			odemeEtiket = "Kredi Kartı"
-		case "paket":
-			odemeEtiket = "Paket"
-		}
-		indirimStr := "—"
-		if indirim > 0 {
-			indirimStr = formatKurusStr(indirim)
-		}
-		tableRows = append(tableRows, []string{
-			ad + " " + soyad,
-			giris.Format("15:04"),
-			cikis.Format("15:04"),
-			fmt.Sprintf("%d dk", dakika),
-			indirimStr,
-			formatKurusStr(tutar),
-			odemeEtiket,
-			kapatmaSekli,
-		})
-		toplamKurus += tutar
-		toplamIndirimKurus += indirim
-		oturumSayisi++
-		switch odemeTipi {
-		case "nakit":
-			nakitKurus += tutar
-			nakitSayisi++
-		case "kredi_karti":
-			kartKurus += tutar
-			kartSayisi++
-		case "paket":
-			paketSayisi++
-		}
-		if erkenOdeme {
-			erkenOdemeKurus += tutar
-			erkenOdemeSayisi++
-		}
+		tableRows = append(tableRows, append([]string{
+			ad + " " + soyad, tarihSaat(o.Giris), tarihSaat(o.Cikis),
+		}, o.hucreler()...))
+		toplam.ekle(o)
 	}
 	rows.Close()
 
@@ -249,6 +202,7 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, http.StatusInternalServerError, "paket satışları alınamadı", err)
 		return
 	}
+	var paketSatisKurus, paketSatisSayisi int64
 	for paketRows.Next() {
 		var ad, soyad, paketAd, odemeTipi string
 		var tutar int64
@@ -258,50 +212,31 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-		odemeEtiket := "Nakit"
-		if odemeTipi == "kredi_karti" {
-			odemeEtiket = "Kredi Kartı"
-		}
 		tableRows = append(tableRows, []string{
-			ad + " " + soyad,
-			satinAlma.Format("15:04"),
-			"—",
-			"—",
-			"—",
-			formatKurusStr(tutar),
-			odemeEtiket,
-			"Paket Satışı: " + paketAd,
+			ad + " " + soyad, tarihSaat(satinAlma), "—", "—",
+			formatKurusStr(tutar), "—", formatKurusStr(tutar),
+			odemeTipiEtiketStr(&odemeTipi), "Paket satışı: " + paketAd,
 		})
-		toplamKurus += tutar
+		toplam.Normal += tutar
+		toplam.Tahsil += tutar
 		paketSatisKurus += tutar
 		paketSatisSayisi++
 		if odemeTipi == "nakit" {
-			nakitKurus += tutar
-			nakitSayisi++
+			toplam.NakitKurus += tutar
+			toplam.NakitSayisi++
 		} else {
-			kartKurus += tutar
-			kartSayisi++
+			toplam.KartKurus += tutar
+			toplam.KartSayisi++
 		}
 	}
 	paketRows.Close()
 
-	ozet := []string{
+	ozet := append([]string{
 		fmt.Sprintf("Gün Başı: %s", acilisZamani.Format("02.01.2006 15:04")),
 		fmt.Sprintf("Gün Sonu: %s", kapanisZamani.Format("02.01.2006 15:04")),
-		fmt.Sprintf("Toplam Oturum: %d", oturumSayisi),
-		fmt.Sprintf("Toplam Ciro: %s", formatKurusStr(toplamKurus)),
-		fmt.Sprintf("Toplam İndirim: %s", formatKurusStr(toplamIndirimKurus)),
-		fmt.Sprintf("Nakit: %d oturum, %s", nakitSayisi, formatKurusStr(nakitKurus)),
-		fmt.Sprintf("Kredi Kartı: %d oturum, %s", kartSayisi, formatKurusStr(kartKurus)),
-	}
-	if paketSayisi > 0 {
-		ozet = append(ozet, fmt.Sprintf("Pakete Sayılan: %d oturum (ücret alınmadı)", paketSayisi))
-	}
+	}, toplam.ozet()...)
 	if paketSatisSayisi > 0 {
-		ozet = append(ozet, fmt.Sprintf("Paket Satışı: %d adet, %s (toplam ciroya dahil)", paketSatisSayisi, formatKurusStr(paketSatisKurus)))
-	}
-	if erkenOdemeSayisi > 0 {
-		ozet = append(ozet, fmt.Sprintf("Erken Ödeme: %d oturum, %s (toplam ciroya dahil)", erkenOdemeSayisi, formatKurusStr(erkenOdemeKurus)))
+		ozet = append(ozet, fmt.Sprintf("Paket Satışı: %d adet · %s (ciroya dahil)", paketSatisSayisi, formatKurusStr(paketSatisKurus)))
 	}
 
 	rapor := pdf.Report{
@@ -310,8 +245,10 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 		BaslikAlt:    "Gün Sonu Raporu",
 		TarihEtiket:  kapanisZamani.Format("02.01.2006"),
 		SummaryLines: ozet,
-		Headers:      []string{"Müşteri", "Giriş", "Çıkış", "Süre", "İndirim", "Tutar", "Ödeme Tipi", "Kapatma Şekli"},
+		Headers:      []string{"Müşteri", "Giriş", "Çıkış", "Süre", "Normal Ücret", "İndirim", "Tahsil Edilen", "Ödeme", "Açıklama"},
 		Rows:         tableRows,
+		SagaHizali:   sagaHizaliSutunlar(3),
+		ToplamSatiri: toplam.toplamSatiri(3),
 		FooterText:   "Sadece Yönetici Görebilir",
 	}
 
@@ -331,9 +268,4 @@ func (a *API) EndBusinessDay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Write(docBytes)
-}
-
-func formatKurusStr(kurus int64) string {
-	lira := float64(kurus) / 100
-	return fmt.Sprintf("%.2f TL", lira)
 }

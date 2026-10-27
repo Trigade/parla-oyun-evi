@@ -5,6 +5,7 @@ import {
   getIsAdmin,
   type CustomerListItem,
   type CustomerPackage,
+  type PackageStatus,
   type CustomerSession,
 } from "../api/client";
 
@@ -17,6 +18,28 @@ function odemeTipiEtiket(tip?: string) {
   if (tip === "kredi_karti") return <span className="badge badge--kart">Kredi Kartı</span>;
   if (tip === "paket") return <span className="badge badge--nakit">Paket</span>;
   return <span className="muted">—</span>;
+}
+
+// Listedeki "Kalan Süre" kutusu: renk kalan hakka göre (yeşil / hardal / terracotta).
+function kalanSureKutusu(d: PackageStatus | null) {
+  if (!d) return <span className="muted">—</span>;
+  let sinif = "badge--ok";
+  let metin: string;
+  if (d.tur === "bakiye") {
+    const kalan = d.kalan_dakika ?? 0;
+    const toplam = d.toplam_dakika ?? 0;
+    metin = `${formatSureMetni(kalan)} kaldı`;
+    if (kalan <= 0) sinif = "badge--bitti";
+    else if (kalan <= toplam * 0.25) sinif = "badge--uyari";
+  } else if (d.gun_hakki_doldu_mu) {
+    sinif = "badge--bitti";
+    metin = "Bu hafta hak doldu";
+  } else {
+    const bugun = d.bugun_kalan_dakika ?? 0;
+    if (bugun <= 0) sinif = "badge--uyari";
+    metin = `Bugün ${formatSureMetni(bugun)} · Bu hafta ${d.bu_hafta_kalan_gun ?? 0} gün`;
+  }
+  return <span className={`badge ${sinif}`}>{metin}</span>;
 }
 
 function tcKimlikNoGecerliMi(tc: string): boolean {
@@ -366,6 +389,7 @@ export default function Musteriler() {
                 <th>Ziyaret</th>
                 <th>Toplam Harcama</th>
                 <th>Aktif Paket</th>
+                <th>Kalan Süre</th>
                 <th>Son Ziyaret</th>
               </tr>
             </thead>
@@ -384,6 +408,7 @@ export default function Musteriler() {
                   <td>{c.toplam_oturum}</td>
                   <td>{formatKurus(c.toplam_harcama_kurus)}</td>
                   <td>{c.aktif_paket ?? "—"}</td>
+                  <td>{kalanSureKutusu(c.aktif_paket_durumu)}</td>
                   <td>{c.son_ziyaret ?? "—"}</td>
                 </tr>
               ))}

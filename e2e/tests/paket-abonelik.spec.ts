@@ -62,3 +62,38 @@ test("kasada abonelik özeti görünür; 1 saat 'Paketten Düş' sonrası bugün
   await page.getByRole("button", { name: "Nakit Ödendi" }).click();
   await expect(page.getByRole("cell", { name: `${ad} Musteri` })).toHaveCount(0, { timeout: 10000 });
 });
+
+test("günlük hakkı aşan oturumda 'Paketten Düş' uyarı paneli açar; Vazgeç kapatır, Aşanı Tahsil Et aşanı tahsil eder", async ({ page }) => {
+  // Aynı günün önceki testlerinden kalan kullanım etkilemesin diye yeni müşteri.
+  const token = await api.adminToken();
+  const tc2 = genValidTC();
+  const ad2 = `E2EAsim${Date.now()}`;
+  const c = await api.createCheckedInTestCustomer(token, { tc: tc2, ad: ad2, soyad: "Musteri", telefon: genValidPhone() });
+  try {
+    await api.closeSession(token, c.sessionId);
+    await api.purchasePackage(token, c.customerId, paketTanimId, "nakit");
+    const s = await api.startSession(token, { tc_kimlik_no: tc2, ad: ad2, soyad: "Musteri", telefon: genValidPhone() });
+    oturumGirisiniGeriCek(s.oturum.id, 360);
+
+    await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+    await page.getByRole("cell", { name: `${ad2} Musteri` }).click();
+    await expect(page.getByText(/Günlük hakkı 2 saat aşıyor/)).toBeVisible();
+    await page.getByRole("button", { name: "Paketten Düş (Ücretsiz)" }).click();
+    await expect(page.getByRole("heading", { name: "Günlük paket hakkı aşıldı" })).toBeVisible();
+    await expect(page.getByText(/2 saat fazla/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Vazgeç" }).click();
+    await expect(page.getByRole("heading", { name: "Günlük paket hakkı aşıldı" })).toHaveCount(0);
+    await expect(page.getByRole("cell", { name: `${ad2} Musteri` })).toBeVisible();
+
+    await page.getByRole("button", { name: "Paketten Düş (Ücretsiz)" }).click();
+    await page.getByRole("dialog").or(page.locator(".modal")).getByRole("button", { name: "Aşanı Tahsil Et: Nakit" }).click();
+    await expect(page.getByRole("cell", { name: `${ad2} Musteri` })).toHaveCount(0, { timeout: 10000 });
+
+    const oturum = (await api.getCustomerSessions(token, c.customerId)).find((x) => x.id === s.oturum.id)!;
+    expect(oturum.paketten_dusulen_dakika).toBe(240);
+    expect(oturum.tahsil_tutar_kurus).toBeGreaterThan(0);
+  } finally {
+    testMusterileriniSil([c.customerId]);
+  }
+});

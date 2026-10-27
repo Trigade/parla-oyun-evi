@@ -492,6 +492,8 @@ type customerListItem struct {
 	SonZiyaret    *string `json:"son_ziyaret,omitempty"`
 	AcikOturumVar bool    `json:"acik_oturum_var"`
 	AktifPaket    *string `json:"aktif_paket,omitempty"`
+	// Aktif paket yoksa null; kasa ekranındaki paket durumuyla aynı hesaptır.
+	AktifPaketDurumu *paketDurumu `json:"aktif_paket_durumu"`
 }
 
 // ListCustomers tüm müşterileri, toplam ziyaret sayısı ve toplam harcaması
@@ -509,13 +511,7 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 			MAX(s.cikis_zamani),
 			-- Hiç oturumu olmayan müşteride BOOL_OR NULL döner (ör. Müşteriler
 			-- ekranından oturum açmadan eklenen kayıt); bu durumda "içeride değil".
-			COALESCE(BOOL_OR(s.durum = 'acik'), false),
-			(
-				SELECT cp.ad FROM customer_packages cp
-				WHERE cp.customer_id = c.id AND cp.gecerlilik_bitis > now()
-					AND (cp.haftalik_gun IS NOT NULL OR cp.kalan_dakika > 0)
-				ORDER BY cp.satin_alma_zamani DESC LIMIT 1
-			)
+			COALESCE(BOOL_OR(s.durum = 'acik'), false)
 		FROM customers c
 		LEFT JOIN sessions s ON s.customer_id = c.id
 		WHERE c.deleted_at IS NULL
@@ -534,7 +530,7 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		var sonZiyaret *time.Time
 		if err := rows.Scan(
 			&item.ID, &item.TCKimlikNo, &item.Ad, &item.Soyad, &item.Telefon, &item.VeliTelefon,
-			&item.ToplamOturum, &item.ToplamHarcama, &sonZiyaret, &item.AcikOturumVar, &item.AktifPaket,
+			&item.ToplamOturum, &item.ToplamHarcama, &sonZiyaret, &item.AcikOturumVar,
 		); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
@@ -552,6 +548,25 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeServerError(w, http.StatusInternalServerError, "müşteriler okunamadı", err)
+		return
+	}
+	rows.Close()
+
+	// shortcut: müşteri başına bir paket sorgusu (N+1); müşteri sayısı yüzleri
+	// aşarsa tek sorguya çevrilmeli.
+	for i := range result {
+		d, err := aktifPaketDurumu(r.Context(), a.DB, result[i].ID)
+		if err != nil {
+			writeServerError(w, http.StatusInternalServerError, "paket durumu alınamadı", err)
+			return
+		}
+		if d.Var {
+			result[i].AktifPaket = &d.Ad
+			result[i].AktifPaketDurumu = &d
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }
