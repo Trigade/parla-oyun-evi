@@ -158,8 +158,8 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 		}
 		h := abonelikKalanHaklar(time.Now(), p.bitis, p.haftalikGun, p.gunlukDakika, gun, dk, oturum > 0)
 		paketOzetSatirlari = append(paketOzetSatirlari,
-			fmt.Sprintf("Abonelik: %s — haftada %d gün, günde %s · bugün kalan %s · bu hafta kalan %d gün · bitiş %s",
-				p.ad, p.haftalikGun, formatSure(p.gunlukDakika), formatSure(h.BugunKalanDakika), h.BuHaftaKalanGun, bitis))
+			fmt.Sprintf("Abonelik: %s — haftada %d gün, günde %s · bu hafta kalan %s · paketten kalan toplam %s · bitiş %s",
+				p.ad, p.haftalikGun, formatSure(p.gunlukDakika), formatSure(h.BuHaftaKalanDakika), formatSure(h.ToplamKalanDakika), bitis))
 	}
 
 	rows, err := a.DB.Query(r.Context(), `

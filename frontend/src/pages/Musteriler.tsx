@@ -32,12 +32,14 @@ function kalanSureKutusu(d: PackageStatus | null) {
     if (kalan <= 0) sinif = "badge--bitti";
     else if (kalan <= toplam * 0.25) sinif = "badge--uyari";
   } else if (d.gun_hakki_doldu_mu) {
-    sinif = "badge--bitti";
-    metin = "Bu hafta hak doldu";
+    sinif = (d.toplam_kalan_dakika ?? 0) > 0 ? "badge--uyari" : "badge--bitti";
+    metin = `Bu hafta hak doldu · Toplam ${formatSureMetni(d.toplam_kalan_dakika ?? 0)}`;
   } else {
-    const bugun = d.bugun_kalan_dakika ?? 0;
-    if (bugun <= 0) sinif = "badge--uyari";
-    metin = `Bugün ${formatSureMetni(bugun)} · Bu hafta ${d.bu_hafta_kalan_gun ?? 0} gün`;
+    const hafta = d.bu_hafta_kalan_dakika ?? 0;
+    const toplam = d.toplam_kalan_dakika ?? 0;
+    if (toplam <= 0) sinif = "badge--bitti";
+    else if (hafta <= 0) sinif = "badge--uyari";
+    metin = `Bu hafta ${formatSureMetni(hafta)} · Toplam ${formatSureMetni(toplam)}`;
   }
   return <span className={`badge ${sinif}`}>{metin}</span>;
 }
@@ -603,7 +605,7 @@ export default function Musteriler() {
                             ? `Kalan: ${formatSureMetni(p.kalan_dakika ?? 0)} / ${formatSureMetni(p.toplam_dakika ?? 0)} · ${formatKurus(p.kalan_deger_kurus ?? 0)}`
                             : p.suresi_dolmus_mu
                               ? formatSureMetni(p.gunluk_dakika)
-                              : `${formatSureMetni(p.gunluk_dakika)} · Bu hafta kalan: ${p.bu_hafta_kalan_gun ?? 0} gün · bugün ${formatSureMetni(p.bugun_kalan_dakika ?? 0)}`}
+                              : `${formatSureMetni(p.gunluk_dakika)} · Bu hafta kalan: ${formatSureMetni(p.bu_hafta_kalan_dakika ?? 0)} · Paketten kalan toplam: ${formatSureMetni(p.toplam_kalan_dakika ?? 0)}`}
                         </td>
                         <td>{formatKurus(p.tutar_kurus)}</td>
                         <td>{p.gecerlilik_bitis}</td>

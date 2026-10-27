@@ -60,6 +60,8 @@ type abonelikHaklari struct {
 	BuHaftaKalanGun   int64 `json:"bu_hafta_kalan_gun"`
 	BuHaftaKalanDakika int64 `json:"bu_hafta_kalan_dakika"`
 	BitiseKalanGun    int64 `json:"bitise_kalan_gun"`
+	// Bu hafta + sonraki haftalar (paket bitişine kadar) kalan toplam dakika.
+	ToplamKalanDakika int64 `json:"toplam_kalan_dakika"`
 }
 
 // takvimGunFarki, iki anın işletme saat dilimindeki takvim günleri arasındaki farktır.
@@ -86,13 +88,20 @@ func abonelikKalanHaklar(simdi, bitis time.Time, haftalikGun, gunlukDakika, buHa
 	}
 	h := abonelikHaklari{BitiseKalanGun: bitiseKalanGun}
 	h.BuHaftaKalanGun = max(0, min(haftalikGun-buHaftaKullanilanGun, takvim))
-	if gunHakkiDoldu {
-		return h
+	if !gunHakkiDoldu {
+		h.BugunKalanDakika = kalanGunluk
+		h.BuHaftaKalanDakika = h.BuHaftaKalanGun * gunlukDakika
+		if bugunSayildi {
+			h.BuHaftaKalanDakika += kalanGunluk
+		}
 	}
-	h.BugunKalanDakika = kalanGunluk
-	h.BuHaftaKalanDakika = h.BuHaftaKalanGun * gunlukDakika
-	if bugunSayildi {
-		h.BuHaftaKalanDakika += kalanGunluk
+	if bitis.Before(simdi) {
+		return h // paket süresi dolmuş
+	}
+	// Sonraki haftalar: her biri için bitiş günü dahil takvim günü sayısı ile haftalık hak arasından küçüğü.
+	h.ToplamKalanDakika = h.BuHaftaKalanDakika
+	for hafta := haftaBasi(simdi).AddDate(0, 0, 7); !hafta.After(bitis); hafta = hafta.AddDate(0, 0, 7) {
+		h.ToplamKalanDakika += min(haftalikGun, takvimGunFarki(hafta, bitis)+1) * gunlukDakika
 	}
 	return h
 }

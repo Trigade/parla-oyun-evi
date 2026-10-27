@@ -828,7 +828,8 @@ export default function KasaEkrani() {
                     <>
                       <div style={{ fontWeight: 600 }}>{paketDurumu && abonelikOzetiMetni(paketDurumu)}</div>
                       <div>
-                        Bu hafta {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün kullanıldı ·
+                        Bugün kalan: {formatSureMetni(paketDurumu?.bugun_kalan_dakika ?? 0)} · Bu hafta{" "}
+                        {paketDurumu?.bu_hafta_kullanilan_gun}/{paketDurumu?.haftalik_gun} gün kullanıldı ·
                         Geçerlilik: {paketDurumu?.gecerlilik_bitis}
                       </div>
                     </>
