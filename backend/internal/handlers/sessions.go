@@ -269,6 +269,9 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 		} else if req.PaketModu == "ucretsiz" {
 			paketDusulen = toplamDakika
 			ucretlendirilecekDakika = 0
+			if asim := toplamDakika - durum.KalanGunlukDakika; durum.Tur == "abonelik" && asim > 0 {
+				islemDetay(r, map[string]any{"gunluk_asim_dakika": asim}) // kasiyer uyarıya rağmen ücretsiz düştü
+			}
 		} else {
 			paketDusulen = durum.KalanGunlukDakika
 			if paketDusulen > toplamDakika {

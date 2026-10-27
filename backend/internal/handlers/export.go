@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,10 +38,7 @@ func (a *API) ExportSessionsPDF(w http.ResponseWriter, r *http.Request) {
 	toExclusive := to.Add(24 * time.Hour)
 
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT
-			c.tc_kimlik_no, c.ad, c.soyad,
-			s.giris_zamani, s.cikis_zamani,
-			s.indirim_kurus, s.tahsil_tutar_kurus, s.odeme_tipi, s.manuel_kapatildi
+		SELECT c.ad, c.soyad, `+oturumRaporKolonlari+`
 		FROM sessions s
 		JOIN customers c ON c.id = s.customer_id
 		WHERE (s.durum = 'kapali' OR s.on_odeme_yapildi_mi)
@@ -56,52 +54,33 @@ func (a *API) ExportSessionsPDF(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	tableRows := [][]string{}
-	var toplamKurus int64
+	var toplam raporToplamlari
 	for rows.Next() {
-		var tcKimlikNo, ad, soyad string
-		var girisZamani time.Time
-		var cikisZamani *time.Time
-		var indirimTutar, tahsilTutar *int64
-		var odemeTipi *string
-		var manuelKapatildi bool
-
-		if err := rows.Scan(&tcKimlikNo, &ad, &soyad, &girisZamani, &cikisZamani,
-			&indirimTutar, &tahsilTutar, &odemeTipi, &manuelKapatildi); err != nil {
+		var ad, soyad string
+		var o oturumKaydi
+		if err := o.scan(rows, &ad, &soyad); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-
-		tahsil := int64(0)
-		if tahsilTutar != nil {
-			tahsil = *tahsilTutar
-		}
-		toplamKurus += tahsil
-
-		tableRows = append(tableRows, []string{
-			ad + " " + soyad,
-			tcKimlikNo,
-			girisZamani.Format("02.01.2006 15:04"),
-			formatNullableTime(cikisZamani),
-			formatKurusStr2(indirimTutar),
-			formatKurusStr2(tahsilTutar),
-			odemeTipiEtiketStr(odemeTipi),
-			manuelKapatildiEtiket(manuelKapatildi),
-		})
+		tableRows = append(tableRows, append([]string{
+			o.Giris.Format("02.01.2006"), ad + " " + soyad, saatStr(o.Giris, o.Giris), saatStr(o.Cikis, o.Giris),
+		}, o.hucreler()...))
+		toplam.ekle(o)
 	}
 
 	rapor := pdf.Report{
-		LogoJPEG:    assets.LogoJPEG,
-		BaslikUst:   "Parla Oyun Evi",
-		BaslikAlt:   "Oturum Raporu",
-		TarihEtiket: fmt.Sprintf("%s — %s", from.Format("02.01.2006"), to.Format("02.01.2006")),
-		SummaryLines: []string{
-			fmt.Sprintf("Toplam Oturum: %d", len(tableRows)),
-			fmt.Sprintf("Toplam Ciro: %s", formatKurusStr(toplamKurus)),
-		},
-		Headers:    []string{"Müşteri", "TC Kimlik No", "Giriş", "Çıkış", "İndirim", "Tutar", "Ödeme Tipi", "Kapatma Şekli"},
-		Rows:       tableRows,
-		FooterText: "Sadece Yönetici Görebilir",
+		LogoJPEG:     assets.LogoJPEG,
+		BaslikUst:    "Parla Oyun Evi",
+		BaslikAlt:    "Oturum Raporu",
+		TarihEtiket:  fmt.Sprintf("%s — %s", from.Format("02.01.2006"), to.Format("02.01.2006")),
+		SummaryLines: toplam.ozet(),
+		Headers:      []string{"Tarih", "Müşteri", "Giriş", "Çıkış", "Süre", "Normal Ücret", "İndirim", "Tahsil Edilen", "Ödeme", "Açıklama"},
+		Rows:         tableRows,
+		SagaHizali:   append([]bool{false}, sagaHizaliSutunlar(3)...),
+		ToplamSatiri: append([]string{""}, toplam.toplamSatiri(3)...),
+		FooterText:   "Sadece Yönetici Görebilir",
 	}
+	rapor.ToplamSatiri[0], rapor.ToplamSatiri[1] = "Toplam", ""
 
 	docBytes, err := pdf.Build(rapor)
 	if err != nil {
@@ -134,7 +113,7 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	}
 
 	paketRows, err := a.DB.Query(r.Context(), `
-		SELECT ad, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
+		SELECT id, ad, COALESCE(haftalik_gun, 0), COALESCE(gunluk_dakika, 0),
 			COALESCE(toplam_dakika, 0), COALESCE(kalan_dakika, 0), tutar_kurus, gecerlilik_bitis
 		FROM customer_packages
 		WHERE customer_id = $1 AND (haftalik_gun IS NOT NULL OR toplam_dakika IS NOT NULL)
@@ -145,35 +124,49 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, http.StatusInternalServerError, "paket bilgisi alınamadı", err)
 		return
 	}
-	var paketOzetSatirlari []string
+	type aktifPaket struct {
+		id, haftalikGun, gunlukDakika, toplamDakika, kalanDakika, tutarKurus int64
+		ad                                                                   string
+		bitis                                                                time.Time
+	}
+	var paketler []aktifPaket
 	for paketRows.Next() {
-		var paketAd string
-		var haftalikGun, gunlukDakika, toplamDakika, kalanDakika, tutarKurus int64
-		var paketBitis time.Time
-		if err := paketRows.Scan(&paketAd, &haftalikGun, &gunlukDakika, &toplamDakika, &kalanDakika, &tutarKurus, &paketBitis); err != nil {
+		var p aktifPaket
+		if err := paketRows.Scan(&p.id, &p.ad, &p.haftalikGun, &p.gunlukDakika, &p.toplamDakika, &p.kalanDakika, &p.tutarKurus, &p.bitis); err != nil {
 			paketRows.Close()
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-		if haftalikGun == 0 { // saat bakiyeli paket
-			paketOzetSatirlari = append(paketOzetSatirlari,
-				fmt.Sprintf("Paket: %s — kalan %d/%d dk (%s değerinde), bitiş %s",
-					paketAd, kalanDakika, toplamDakika, formatKurusStr(kalanDegerKurus(tutarKurus, toplamDakika, kalanDakika)),
-					paketBitis.Format("02.01.2006")))
-			continue
-		}
-		paketOzetSatirlari = append(paketOzetSatirlari,
-			fmt.Sprintf("Paket: %s — haftada %d gün, günde %d dk, %s, bitiş %s",
-				paketAd, haftalikGun, gunlukDakika, formatKurusStr(tutarKurus), paketBitis.Format("02.01.2006")))
+		paketler = append(paketler, p)
 	}
 	paketRows.Close()
 
+	var paketOzetSatirlari []string
+	for _, p := range paketler {
+		bitis := p.bitis.Format("02.01.2006")
+		if p.haftalikGun == 0 { // saat bakiyeli paket
+			paketOzetSatirlari = append(paketOzetSatirlari,
+				fmt.Sprintf("Bakiye paketi: %s — kalan %s / %s (%s değerinde) · bitiş %s",
+					p.ad, formatSure(p.kalanDakika), formatSure(p.toplamDakika),
+					formatKurusStr(kalanDegerKurus(p.tutarKurus, p.toplamDakika, p.kalanDakika)), bitis))
+			continue
+		}
+		gun, dk, oturum, err := abonelikKullanimi(r.Context(), a.DB, p.id)
+		if err != nil {
+			writeServerError(w, http.StatusInternalServerError, "paket kullanımı alınamadı", err)
+			return
+		}
+		h := abonelikKalanHaklar(time.Now(), p.bitis, p.haftalikGun, p.gunlukDakika, gun, dk, oturum > 0)
+		paketOzetSatirlari = append(paketOzetSatirlari,
+			fmt.Sprintf("Abonelik: %s — haftada %d gün, günde %s · bugün kalan %s · bu hafta kalan %d gün · bitiş %s",
+				p.ad, p.haftalikGun, formatSure(p.gunlukDakika), formatSure(h.BugunKalanDakika), h.BuHaftaKalanGun, bitis))
+	}
+
 	rows, err := a.DB.Query(r.Context(), `
-		SELECT giris_zamani, cikis_zamani, durum,
-			indirim_kurus, tahsil_tutar_kurus, odeme_tipi, manuel_kapatildi
-		FROM sessions
-		WHERE customer_id = $1
-		ORDER BY giris_zamani DESC`,
+		SELECT `+oturumRaporKolonlari+`
+		FROM sessions s
+		WHERE s.customer_id = $1
+		ORDER BY s.giris_zamani DESC`,
 		id,
 	)
 	if err != nil {
@@ -183,40 +176,26 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	tableRows := [][]string{}
-	var toplamKurus int64
+	var toplam raporToplamlari
 	for rows.Next() {
-		var girisZamani time.Time
-		var cikisZamani *time.Time
-		var durum string
-		var indirimTutar, tahsilTutar *int64
-		var odemeTipi *string
-		var manuelKapatildi bool
-
-		if err := rows.Scan(&girisZamani, &cikisZamani, &durum,
-			&indirimTutar, &tahsilTutar, &odemeTipi, &manuelKapatildi); err != nil {
+		var o oturumKaydi
+		if err := o.scan(rows); err != nil {
 			writeServerError(w, http.StatusInternalServerError, "satır okunamadı", err)
 			return
 		}
-
-		if tahsilTutar != nil {
-			toplamKurus += *tahsilTutar
-		}
-
-		tableRows = append(tableRows, []string{
-			girisZamani.Format("02.01.2006 15:04"),
-			formatNullableTime(cikisZamani),
-			durumEtiket(durum),
-			formatKurusStr2(indirimTutar),
-			formatKurusStr2(tahsilTutar),
-			odemeTipiEtiketStr(odemeTipi),
-			manuelKapatildiEtiket(manuelKapatildi),
-		})
+		tableRows = append(tableRows, append([]string{
+			o.Giris.Format("02.01.2006"), saatStr(o.Giris, o.Giris), saatStr(o.Cikis, o.Giris),
+		}, o.hucreler()...))
+		toplam.ekle(o)
 	}
 
 	summaryLines := []string{
-		fmt.Sprintf("Müşteri: %s %s (TC: %s, Tel: %s)", ad, soyad, tcKimlikNo, telefon),
-		fmt.Sprintf("Toplam Oturum: %d", len(tableRows)),
-		fmt.Sprintf("Toplam Harcama: %s", formatKurusStr(toplamKurus)),
+		fmt.Sprintf("Müşteri: %s %s", ad, soyad),
+		fmt.Sprintf("Telefon: %s", telefon),
+		fmt.Sprintf("TC Kimlik No: %s", maskeTC(tcKimlikNo)),
+		fmt.Sprintf("Toplam Oturum: %d", toplam.Oturum),
+		fmt.Sprintf("Toplam Harcama: %s", formatKurusStr(toplam.Tahsil)),
+		fmt.Sprintf("Toplam İndirim: %s", formatKurusStr(toplam.Indirim)),
 	}
 	summaryLines = append(summaryLines, paketOzetSatirlari...)
 	if len(paketOzetSatirlari) == 0 {
@@ -229,8 +208,10 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 		BaslikAlt:    "Müşteri Geçmişi",
 		TarihEtiket:  time.Now().In(BusinessLocation).Format("02.01.2006"),
 		SummaryLines: summaryLines,
-		Headers:      []string{"Giriş", "Çıkış", "Durum", "İndirim", "Tutar", "Ödeme Tipi", "Kapatma Şekli"},
+		Headers:      []string{"Tarih", "Giriş", "Çıkış", "Süre", "Normal Ücret", "İndirim", "Tahsil Edilen", "Ödeme", "Açıklama"},
 		Rows:         tableRows,
+		SagaHizali:   sagaHizaliSutunlar(3),
+		ToplamSatiri: toplam.toplamSatiri(3),
 		FooterText:   "Sadece Yönetici Görebilir",
 	}
 
@@ -246,11 +227,13 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 	w.Write(docBytes)
 }
 
-func formatNullableTime(t *time.Time) string {
-	if t == nil {
-		return "—"
+// maskeTC kimlik numarasının ilk 3 ve son 2 hanesini gösterir (kişisel veri).
+func maskeTC(tc string) string {
+	r := []rune(tc)
+	if len(r) < 6 {
+		return tc
 	}
-	return t.Format("02.01.2006 15:04")
+	return string(r[:3]) + strings.Repeat("*", len(r)-5) + string(r[len(r)-2:])
 }
 
 func formatKurusStr2(kurus *int64) string {
@@ -258,13 +241,6 @@ func formatKurusStr2(kurus *int64) string {
 		return "—"
 	}
 	return formatKurusStr(*kurus)
-}
-
-func formatDakikaStr(dakika int64) string {
-	if dakika == 0 {
-		return "—"
-	}
-	return fmt.Sprintf("%d dk", dakika)
 }
 
 func odemeTipiEtiketStr(tip *string) string {
@@ -278,22 +254,4 @@ func odemeTipiEtiketStr(tip *string) string {
 		return "Paket"
 	}
 	return "Nakit"
-}
-
-func manuelKapatildiEtiket(v bool) string {
-	if v {
-		return "Elle Kapatıldı"
-	}
-	return "Normal"
-}
-
-func durumEtiket(durum string) string {
-	switch durum {
-	case "acik":
-		return "Açık"
-	case "iptal":
-		return "İptal"
-	default:
-		return "Kapalı"
-	}
 }

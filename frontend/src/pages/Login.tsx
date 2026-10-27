@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
+import TemaButonu from "../components/TemaButonu";
 import { SURUM } from "../surum";
 
 type Asama = "girdi" | "totp_kurulum" | "totp_dogrulama";
@@ -108,22 +109,13 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
-    >
-      <div className="card" style={{ width: 360, textAlign: "center" }}>
-        <img
-          src="/logo.jpeg"
-          alt="Parla Oyun Evi"
-          style={{ width: 88, height: 88, objectFit: "cover", borderRadius: "50%", margin: "0 auto 12px" }}
-        />
-        <h1 style={{ marginBottom: 2 }}>Parla Oyun Evi</h1>
+    <div className="login-wrap">
+      <div className="card login-card">
+        <TemaButonu />
+        <span className="logo-disc login-sign">
+          <img src="/parla-tabela.jpg" alt="Parla Oyun Evi" />
+        </span>
+        <h1>Parla Oyun Evi</h1>
 
         {asama === "girdi" && (
           <>
@@ -230,7 +222,9 @@ export default function Login() {
           </>
         )}
 
-        <p className="muted" style={{ marginTop: 16, fontSize: 11, opacity: 0.7 }}>{SURUM}</p>
+        <p className="login-surum">
+          <span className="surum-pill">{SURUM}</span>
+        </p>
       </div>
     </div>
   );

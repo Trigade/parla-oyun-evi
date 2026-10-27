@@ -52,6 +52,14 @@ async function oturumAcVeSec(page: import("@playwright/test").Page, dakikaGeri: 
   return s.oturum.id;
 }
 
+test("Müşteriler listesinde 'Kalan Süre' hücresi bakiyeyi gösterir", async ({ page }) => {
+  await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+  await page.goto("/musteriler");
+  await page.getByPlaceholder(/Örn: Ahmet/).fill(ad);
+  const satir = page.getByRole("row", { name: new RegExp(`${ad} Musteri`) });
+  await expect(satir.getByText("10 saat kaldı")).toBeVisible();
+});
+
 test("1 saat kullanılıp 'Paketten Düş' ile kapatılınca bakiye 9 saate ve değer 1.350 TL'ye düşer", async ({ page }) => {
   const token = await api.adminToken();
   await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);

@@ -78,6 +78,7 @@ export default function KasaEkrani() {
   const [suresiDolanUyari, setSuresiDolanUyari] = useState<OpenSession | null>(null);
   const [uyariGosterilenIdler, setUyariGosterilenIdler] = useState<Set<number>>(new Set());
   const [uzatiliyor, setUzatiliyor] = useState(false);
+  const [asimOnayAcik, setAsimOnayAcik] = useState(false);
 
   const [gunAcik, setGunAcik] = useState<boolean | null>(null);
 
@@ -265,6 +266,7 @@ export default function KasaEkrani() {
     setIndirimDeger("");
     setOzelTutar("");
     setPaketDurumu(null);
+    setAsimOnayAcik(false);
   }
 
   // Seçilen oturumun müşterisinin abonelik durumu (bu hafta kaç gün kullandı,
@@ -414,6 +416,8 @@ export default function KasaEkrani() {
   const paketAsanDakika = paketVar ? Math.max(0, canliDakika - paketKalanGunlukDakika) : 0;
   const bakiyePaketi = paketDurumu?.tur === "bakiye";
   const paketAsanTutar = paketAsanDakika > 0 ? tierUcretiHesapla(paketAsanDakika, pricingPolicy) : null;
+  // Abonelikte ücretsiz düşmeden önce kasiyere gösterilen uyarı: günlük süre aşımı ya da haftalık gün hakkı dolması.
+  const abonelikUyarisi = paketVar && !bakiyePaketi && (paketAsanDakika > 0 || paketDurumu?.gun_hakki_doldu_mu === true);
 
   const tahminiTutarHam = tierUcretiHesapla(canliDakika, pricingPolicy);
   const yuvarlanmisTutar = tahminiTutarHam != null && yuvarla ? yuvarlaKurus(tahminiTutarHam) : tahminiTutarHam;
@@ -650,7 +654,7 @@ export default function KasaEkrani() {
 
             {asama === "kayit_gerekli" && (
               <div>
-                <div className="alert alert--error" style={{ background: "rgba(227,165,58,0.14)", color: "var(--mustard-dark)", borderColor: "rgba(227,165,58,0.3)" }}>
+                <div className="alert alert--warn">
                   {sorguTipi === "tc"
                     ? `Bu TC kimlik no (${tcKimlikNo}) ile kayıtlı müşteri bulunamadı. Yeni müşteri kaydı oluşturun.`
                     : `Bu telefon numarası (${telefon}) ile kayıtlı müşteri bulunamadı. Yeni müşteri kaydı oluşturun.`}
@@ -835,8 +839,8 @@ export default function KasaEkrani() {
                     </div>
                   )}
                   {paketAsanDakika > 0 && (
-                    <div style={{ marginTop: 6 }}>
-                      {bakiyePaketi ? "Kalan bakiyeyi" : "Günlük hakkı"} {formatSureMetni(paketAsanDakika)} aşıyor
+                    <div className="alert alert--warn" style={{ marginTop: 10, marginBottom: 0 }}>
+                      ⚠ {bakiyePaketi ? "Kalan bakiyeyi" : "Günlük hakkı"} {formatSureMetni(paketAsanDakika)} aşıyor
                       {paketAsanTutar != null && paketAsanTutar > 0
                         ? ` · aşan süre ücreti ${formatKurus(paketAsanTutar)}`
                         : ""}
@@ -847,7 +851,9 @@ export default function KasaEkrani() {
                     <button
                       className="secondary"
                       disabled={kapatiliyor || (bakiyePaketi && paketAsanDakika > 0)}
-                      onClick={() => odendiIsaretle(seciliSession.id, "paket", "ucretsiz")}
+                      onClick={() =>
+                        abonelikUyarisi ? setAsimOnayAcik(true) : odendiIsaretle(seciliSession.id, "paket", "ucretsiz")
+                      }
                     >
                       Paketten Düş (Ücretsiz)
                     </button>
@@ -1025,9 +1031,9 @@ export default function KasaEkrani() {
                     style={{
                       cursor: "pointer",
                       background: doldu
-                        ? "rgba(200,60,60,0.14)"
+                        ? "var(--row-bad)"
                         : seciliSessionId === s.id
-                        ? "rgba(227,165,58,0.12)"
+                        ? "var(--row-sel)"
                         : undefined,
                     }}
                   >
@@ -1037,7 +1043,7 @@ export default function KasaEkrani() {
                         <span className="badge badge--nakit" style={{ marginLeft: 8 }}>Ödendi</span>
                       )}
                       {doldu && (
-                        <span className="badge" style={{ marginLeft: 8, background: "var(--terracotta-dark)", color: "#fff" }}>
+                        <span className="badge badge--solid" style={{ marginLeft: 8 }}>
                           ⏰ Süresi Doldu
                         </span>
                       )}
@@ -1054,6 +1060,55 @@ export default function KasaEkrani() {
           </table>
         )}
       </div>
+
+      {seciliSession && paketDurumu && asimOnayAcik && abonelikUyarisi && (
+        <div className="modal-overlay" onClick={() => setAsimOnayAcik(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <h2 style={{ fontSize: 22, marginBottom: 12 }}>
+              {paketAsanDakika > 0 ? "Günlük paket hakkı aşıldı" : "Haftalık gün hakkı doldu"}
+            </h2>
+            {paketAsanDakika > 0 && (
+              <>
+                <p style={{ marginBottom: 8 }}>
+                  Günlük hak: {formatSureMetni(paketDurumu.gunluk_dakika ?? 0)} · Bugün kalan:{" "}
+                  {formatSureMetni(paketKalanGunlukDakika)} · İçeride geçen: {formatSureMetni(canliDakika)} →{" "}
+                  <strong>{formatSureMetni(paketAsanDakika)} fazla.</strong>
+                </p>
+                {paketAsanTutar != null && (
+                  <p style={{ marginBottom: 8 }}>
+                    Aşan {formatSureMetni(paketAsanDakika)}'in ücreti: <strong>{formatKurus(paketAsanTutar)}</strong>
+                  </p>
+                )}
+              </>
+            )}
+            {paketDurumu.gun_hakki_doldu_mu && (
+              <p style={{ marginBottom: 8 }}>
+                Bu hafta {paketDurumu.bu_hafta_kullanilan_gun}/{paketDurumu.haftalik_gun} gün kullanıldı.
+              </p>
+            )}
+            <div className="field-row" style={{ marginTop: 16 }}>
+              {paketAsanDakika > 0 && (
+                <>
+                  <button disabled={kapatiliyor} onClick={() => odendiIsaretle(seciliSession.id, "nakit", "asim")}>
+                    Aşanı Tahsil Et: Nakit
+                  </button>
+                  <button disabled={kapatiliyor} onClick={() => odendiIsaretle(seciliSession.id, "kredi_karti", "asim")}>
+                    Aşanı Tahsil Et: Kredi Kartı
+                  </button>
+                </>
+              )}
+              <button
+                className="accent"
+                disabled={kapatiliyor}
+                onClick={() => odendiIsaretle(seciliSession.id, "paket", "ucretsiz")}
+              >
+                Yine de Ücretsiz Düş
+              </button>
+              <button className="ghost" onClick={() => setAsimOnayAcik(false)}>Vazgeç</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {suresiDolanUyari && (
         <div className="modal-overlay" onClick={() => setSuresiDolanUyari(null)}>
