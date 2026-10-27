@@ -53,14 +53,23 @@ test("kasada abonelik özeti görünür; 1 saat 'Paketten Düş' sonrası bugün
   await expect(page.getByRole("heading", { name: "Kasa Ekranı" })).toBeVisible();
 
   await oturumAcVeSec(page, 60);
-  await expect(page.getByText(/Bugün kalan: 4 saat · Bu hafta kalan: \d+ gün \(toplam .+\) · Paket bitişi: \d{2}\.\d{2}\.\d{4} \(\d+ gün kaldı\)/)).toBeVisible();
+  await expect(page.getByText(/Bu hafta kalan: .+ · Paketten kalan toplam: .+ · Paket bitişi: \d{2}\.\d{2}\.\d{4} \(\d+ gün kaldı\)/)).toBeVisible();
+  await expect(page.getByText(/Bugün kalan: 4 saat · Bu hafta \d+\/5 gün kullanıldı/)).toBeVisible();
   await page.getByRole("button", { name: "Paketten Düş (Ücretsiz)" }).click();
   await expect(page.getByRole("cell", { name: `${ad} Musteri` })).toHaveCount(0, { timeout: 10000 });
 
   await oturumAcVeSec(page, 1);
-  await expect(page.getByText(/Bugün kalan: 3 saat · Bu hafta kalan:/)).toBeVisible();
+  await expect(page.getByText(/Bugün kalan: 3 saat · Bu hafta \d+\/5 gün kullanıldı/)).toBeVisible();
   await page.getByRole("button", { name: "Nakit Ödendi" }).click();
   await expect(page.getByRole("cell", { name: `${ad} Musteri` })).toHaveCount(0, { timeout: 10000 });
+});
+
+test("Müşteriler listesinde abonelik 'Kalan Süre' hücresi bu hafta ve toplam süreyi gösterir", async ({ page }) => {
+  await loginViaUIWithTotp(page, ADMIN_USERNAME, ADMIN_PASSWORD);
+  await page.goto("/musteriler");
+  await page.getByPlaceholder(/Örn: Ahmet/).fill(ad);
+  const satir = page.getByRole("row", { name: new RegExp(`${ad} Musteri`) });
+  await expect(satir.getByText(/Bu hafta .+ · Toplam .+/)).toBeVisible();
 });
 
 test("günlük hakkı aşan oturumda 'Paketten Düş' uyarı paneli açar; Vazgeç kapatır, Aşanı Tahsil Et aşanı tahsil eder", async ({ page }) => {
