@@ -316,6 +316,8 @@ func main() {
 				r.Delete("/users/{id}/devices/{cihazId}", api.DeleteUserDevice)
 				r.Delete("/customers/{id}", api.DeleteCustomer)
 				r.Post("/package-definitions", api.CreatePackageDefinition)
+				r.Patch("/package-definitions/{id}", api.UpdatePackageDefinition)
+				r.Patch("/customers/{id}/packages/{paketId}", api.UpdateCustomerPackage)
 			})
 		})
 	})

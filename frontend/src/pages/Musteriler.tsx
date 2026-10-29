@@ -74,6 +74,17 @@ export default function Musteriler() {
   const [duzenleVeliTelefon, setDuzenleVeliTelefon] = useState("");
   const [kaydediliyor, setKaydediliyor] = useState(false);
   const [duzenleHata, setDuzenleHata] = useState<string | null>(null);
+  // Yönetici: satın alınmış paketi düzeltme formu (id doluysa açık).
+  const [pDuzenleId, setPDuzenleId] = useState<number | null>(null);
+  const [pTur, setPTur] = useState<"abonelik" | "bakiye">("abonelik");
+  const [pAd, setPAd] = useState("");
+  const [pHaftalikGun, setPHaftalikGun] = useState("3");
+  const [pGunlukSaat, setPGunlukSaat] = useState("4");
+  const [pToplamSaat, setPToplamSaat] = useState("10");
+  const [pKalanSaat, setPKalanSaat] = useState("10");
+  const [pBitis, setPBitis] = useState("");
+  const [pKaydediliyor, setPKaydediliyor] = useState(false);
+  const [pHata, setPHata] = useState<string | null>(null);
   const [siliniyor, setSiliniyor] = useState(false);
   const [silmeOnayGosteriliyor, setSilmeOnayGosteriliyor] = useState(false);
   const isAdmin = getIsAdmin();
@@ -179,7 +190,62 @@ export default function Musteriler() {
     }
   }
 
+  const saatMetni = (dk: number) => String(dk / 60).replace(".", ",");
+
+  function paketDuzenlemeyeBasla(p: CustomerPackage) {
+    setPDuzenleId(p.id);
+    setPTur(p.tur);
+    setPAd(p.ad);
+    setPHaftalikGun(String(p.haftalik_gun || 3));
+    setPGunlukSaat(saatMetni(p.gunluk_dakika || 240));
+    setPToplamSaat(saatMetni(p.toplam_dakika || 600));
+    // Abonelikten bakiyeye çevrilirken kalan 0 gelmesin (yanlışlıkla sıfırlanmasın).
+    setPKalanSaat(saatMetni(p.tur === "bakiye" ? p.kalan_dakika ?? 0 : p.toplam_dakika || 600));
+    setPBitis(p.gecerlilik_bitis.slice(0, 10));
+    setPHata(null);
+  }
+
+  async function paketDuzenlemeyiKaydet() {
+    if (!seciliMusteri || pDuzenleId === null) return;
+    const sayi = (v: string) => Number(v.replace(",", "."));
+    const bakiyeMi = pTur === "bakiye";
+    if (!pAd.trim()) return setPHata("Paket adı girin.");
+    if (!bakiyeMi) {
+      const gun = Number(pHaftalikGun);
+      const saat = sayi(pGunlukSaat);
+      if (!Number.isInteger(gun) || gun < 1 || gun > 7) return setPHata("Haftalık gün 1 ile 7 arasında olmalı.");
+      if (!Number.isFinite(saat) || saat <= 0 || saat > 24) return setPHata("Günlük süre 0'dan büyük ve en fazla 24 saat olmalı.");
+    } else {
+      const toplam = sayi(pToplamSaat);
+      const kalan = sayi(pKalanSaat);
+      if (!Number.isFinite(toplam) || toplam <= 0 || toplam > 1000) return setPHata("Toplam süre 0'dan büyük olmalı.");
+      if (!Number.isFinite(kalan) || kalan < 0 || kalan > toplam) return setPHata("Kalan süre 0 ile toplam süre arasında olmalı.");
+    }
+    if (!pBitis) return setPHata("Geçerlilik bitişi tarihini seçin.");
+    setPHata(null);
+    setPKaydediliyor(true);
+    try {
+      await api.updateCustomerPackage(seciliMusteri.id, pDuzenleId, {
+        tur: pTur,
+        ad: pAd.trim(),
+        haftalik_gun: bakiyeMi ? 0 : Number(pHaftalikGun),
+        gunluk_dakika: bakiyeMi ? 0 : Math.round(sayi(pGunlukSaat) * 60),
+        toplam_dakika: bakiyeMi ? Math.round(sayi(pToplamSaat) * 60) : 0,
+        kalan_dakika: bakiyeMi ? Math.round(sayi(pKalanSaat) * 60) : 0,
+        gecerlilik_bitis: pBitis,
+      });
+      setPDuzenleId(null);
+      setPaketler(await api.listCustomerPackages(seciliMusteri.id));
+      refresh(); // listedeki "Aktif Paket" sütunu da güncellensin
+    } catch (e) {
+      setPHata((e as Error).message);
+    } finally {
+      setPKaydediliyor(false);
+    }
+  }
+
   function kapat() {
+    setPDuzenleId(null);
     setSeciliMusteri(null);
     setGecmis([]);
     setPaketler([]);
@@ -593,6 +659,7 @@ export default function Musteriler() {
                       <th>Tutar</th>
                       <th>Geçerlilik Bitişi</th>
                       <th>Durum</th>
+                      {isAdmin && <th></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -618,10 +685,74 @@ export default function Musteriler() {
                             <span className="badge badge--nakit">Aktif</span>
                           )}
                         </td>
+                        {isAdmin && (
+                          <td>
+                            <button className="ghost" onClick={() => paketDuzenlemeyeBasla(p)}>Paketi Düzenle</button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                {isAdmin && pDuzenleId !== null && (
+                  <div style={{ marginTop: 12, padding: 12, background: "var(--cream-soft)", borderRadius: 8 }}>
+                    <strong>Paketi Düzenle</strong>
+                    <p className="muted" style={{ margin: "4px 0 8px" }}>
+                      Tutar, ödeme tipi ve satın alma zamanı değiştirilemez.
+                    </p>
+                    <div className="field-row" style={{ alignItems: "flex-end" }}>
+                      <div className="field">
+                        <label htmlFor="p-duzenle-tur">Tür</label>
+                        <select id="p-duzenle-tur" value={pTur} onChange={(e) => setPTur(e.target.value as "abonelik" | "bakiye")} style={{ maxWidth: 170 }}>
+                          <option value="abonelik">Abonelik</option>
+                          <option value="bakiye">Saatlik bakiye</option>
+                        </select>
+                      </div>
+                      <div className="field">
+                        <label htmlFor="p-duzenle-ad">Ad</label>
+                        <input id="p-duzenle-ad" value={pAd} onChange={(e) => setPAd(e.target.value)} style={{ maxWidth: 220 }} />
+                      </div>
+                      {pTur === "abonelik" ? (
+                        <>
+                          <div className="field">
+                            <label htmlFor="p-duzenle-gun">Haftalık Gün</label>
+                            <select id="p-duzenle-gun" value={pHaftalikGun} onChange={(e) => setPHaftalikGun(e.target.value)} style={{ maxWidth: 120 }}>
+                              {[1, 2, 3, 4, 5, 6, 7].map((g) => (
+                                <option key={g} value={g}>{g} Gün</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field">
+                            <label htmlFor="p-duzenle-gunluk">Günlük Süre (saat)</label>
+                            <input id="p-duzenle-gunluk" value={pGunlukSaat} onChange={(e) => setPGunlukSaat(e.target.value)} style={{ maxWidth: 120 }} />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="field">
+                            <label htmlFor="p-duzenle-toplam">Toplam Süre (saat)</label>
+                            <input id="p-duzenle-toplam" value={pToplamSaat} onChange={(e) => setPToplamSaat(e.target.value)} style={{ maxWidth: 120 }} />
+                          </div>
+                          <div className="field">
+                            <label htmlFor="p-duzenle-kalan">Kalan Süre (saat)</label>
+                            <input id="p-duzenle-kalan" value={pKalanSaat} onChange={(e) => setPKalanSaat(e.target.value)} style={{ maxWidth: 120 }} />
+                          </div>
+                        </>
+                      )}
+                      <div className="field">
+                        <label htmlFor="p-duzenle-bitis">Geçerlilik Bitişi</label>
+                        <input id="p-duzenle-bitis" type="date" value={pBitis} onChange={(e) => setPBitis(e.target.value)} style={{ maxWidth: 170 }} />
+                      </div>
+                    </div>
+                    {pHata && <div className="alert alert--error" style={{ marginTop: 12 }}>{pHata}</div>}
+                    <div className="field-row" style={{ marginTop: 12 }}>
+                      <button onClick={paketDuzenlemeyiKaydet} disabled={pKaydediliyor}>
+                        {pKaydediliyor ? "Kaydediliyor..." : "Kaydet"}
+                      </button>
+                      <button className="ghost" onClick={() => setPDuzenleId(null)} disabled={pKaydediliyor}>İptal</button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
