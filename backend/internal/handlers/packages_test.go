@@ -30,3 +30,32 @@ func TestKalanDegerKurus(t *testing.T) {
 		t.Fatalf("0 beklendi, %d", got)
 	}
 }
+
+func TestPaketTanimiDogrula(t *testing.T) {
+	// abonelik -> bakiye: haftalık/günlük NULL, dakika dolu
+	r := createPackageDefinitionRequest{Tur: "bakiye", Ad: "10 Saat", Dakika: 600, HaftalikGun: 3, GunlukDakika: 240}
+	h, g, d, hata := r.dogrula()
+	if hata != "" || h != nil || g != nil || d == nil || *d != 600 || r.Grup != "Standart" {
+		t.Fatalf("bakiye: %v %v %v %q", h, g, d, hata)
+	}
+	// bakiye -> abonelik (boş tür = abonelik): dakika NULL
+	r = createPackageDefinitionRequest{Ad: "3 Gün", Dakika: 600, HaftalikGun: 3, GunlukDakika: 240}
+	h, g, d, hata = r.dogrula()
+	if hata != "" || d != nil || h == nil || *h != 3 || g == nil || *g != 240 {
+		t.Fatalf("abonelik: %v %v %v %q", h, g, d, hata)
+	}
+	gecersiz := []createPackageDefinitionRequest{
+		{Tur: "x", Ad: "a"},
+		{Ad: ""},
+		{Tur: "bakiye", Ad: "a", Dakika: 0},
+		{Tur: "bakiye", Ad: "a", Dakika: 100001},
+		{Ad: "a", HaftalikGun: 8, GunlukDakika: 60},
+		{Ad: "a", HaftalikGun: 3, GunlukDakika: 1441},
+		{Ad: "a", HaftalikGun: 3, GunlukDakika: 60, AylikUcretKurus: -1},
+	}
+	for i, r := range gecersiz {
+		if _, _, _, hata := r.dogrula(); hata == "" {
+			t.Fatalf("%d numaralı geçersiz istek kabul edildi", i)
+		}
+	}
+}

@@ -55,6 +55,28 @@ export default function SatinAlma() {
   const [yeniAylikUcret, setYeniAylikUcret] = useState("");
   const [paketOlusturuluyor, setPaketOlusturuluyor] = useState(false);
   const [paketTanimHata, setPaketTanimHata] = useState<string | null>(null);
+  // Doluysa "Paket Tanımla" formu bu tanımı düzenler (yalnızca yönetici).
+  const [duzenlenenPaketId, setDuzenlenenPaketId] = useState<number | null>(null);
+
+  function duzenlemeyeBasla(p: PackageDefinition) {
+    setDuzenlenenPaketId(p.id);
+    setYeniTur(p.tur);
+    setYeniPaketAdi(p.ad);
+    setYeniGrup(p.grup);
+    setYeniToplamSaat(String((p.dakika ?? 0) / 60).replace(".", ","));
+    setYeniHaftalikGun(String(p.haftalik_gun || 3));
+    setYeniGunlukSaat(String(p.gunluk_dakika / 60 || 4).replace(".", ","));
+    setYeniAylikUcret(String(p.aylik_ucret_kurus / 100).replace(".", ","));
+    setPaketTanimHata(null);
+    document.getElementById("yeni-paket-adi")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function duzenlemedenVazgec() {
+    setDuzenlenenPaketId(null);
+    setYeniPaketAdi("");
+    setYeniAylikUcret("");
+    setPaketTanimHata(null);
+  }
 
   async function paketleriYukle() {
     try {
@@ -169,17 +191,21 @@ export default function SatinAlma() {
     }
     setPaketOlusturuluyor(true);
     try {
-      await api.createPackageDefinition(
+      const alanlar = [
         yeniPaketAdi.trim(),
         yeniGrup.trim() || "Standart",
         bakiyeMi ? 0 : haftalikGun,
         bakiyeMi ? 0 : Math.round(gunlukSaat * 60),
         Math.round(aylikUcret * 100),
         yeniTur,
-        bakiyeMi ? Math.round(toplamSaat * 60) : 0
-      );
-      setYeniPaketAdi("");
-      setYeniAylikUcret("");
+        bakiyeMi ? Math.round(toplamSaat * 60) : 0,
+      ] as const;
+      if (duzenlenenPaketId !== null) {
+        await api.updatePackageDefinition(duzenlenenPaketId, ...alanlar);
+      } else {
+        await api.createPackageDefinition(...alanlar);
+      }
+      duzenlemedenVazgec();
       await paketleriYukle();
     } catch (e) {
       setPaketTanimHata((e as Error).message);
@@ -217,6 +243,7 @@ export default function SatinAlma() {
                 <th>Tür</th>
                 <th>Hak</th>
                 <th>Ücret</th>
+                {isAdmin && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -227,6 +254,11 @@ export default function SatinAlma() {
                   <td>{p.tur === "bakiye" ? "Saat bakiyeli" : "Abonelik"}</td>
                   <td>{hakMetni(p)}</td>
                   <td>{p.tur === "bakiye" ? formatKurus(p.aylik_ucret_kurus) : `${formatKurus(p.aylik_ucret_kurus)} / ay`}</td>
+                  {isAdmin && (
+                    <td>
+                      <button className="ghost" onClick={() => duzenlemeyeBasla(p)}>Düzenle</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -407,7 +439,7 @@ export default function SatinAlma() {
 
       {isAdmin && (
         <div className="card">
-          <h2>Yeni Paket Türü Tanımla</h2>
+          <h2>{duzenlenenPaketId !== null ? "Paketi Düzenle" : "Yeni Paket Türü Tanımla"}</h2>
           <div className="field-row" style={{ alignItems: "flex-end" }}>
             <div className="field">
               <label htmlFor="yeni-paket-tur">Tür</label>
@@ -492,8 +524,11 @@ export default function SatinAlma() {
               />
             </div>
             <button onClick={paketTanimla} disabled={paketOlusturuluyor}>
-              {paketOlusturuluyor ? "Kaydediliyor..." : "Paket Türü Ekle"}
+              {paketOlusturuluyor ? "Kaydediliyor..." : duzenlenenPaketId !== null ? "Kaydet" : "Paket Türü Ekle"}
             </button>
+            {duzenlenenPaketId !== null && (
+              <button className="ghost" onClick={duzenlemedenVazgec} disabled={paketOlusturuluyor}>Vazgeç</button>
+            )}
           </div>
           {paketTanimHata && <div className="alert alert--error" style={{ marginTop: 12 }}>{paketTanimHata}</div>}
         </div>

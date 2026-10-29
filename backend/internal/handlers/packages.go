@@ -178,42 +178,9 @@ func (a *API) CreatePackageDefinition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.Ad == "" || len(req.Ad) > 100 {
-		writeError(w, http.StatusBadRequest, "paket adı boş olamaz ve en fazla 100 karakter olabilir")
-		return
-	}
-	if req.Grup == "" {
-		req.Grup = "Standart"
-	}
-	if len(req.Grup) > 50 {
-		writeError(w, http.StatusBadRequest, "yaş/grup en fazla 50 karakter olabilir")
-		return
-	}
-	bakiyeMi := req.Tur == "bakiye"
-	if req.Tur != "" && req.Tur != "abonelik" && !bakiyeMi {
-		writeError(w, http.StatusBadRequest, "paket türü 'abonelik' veya 'bakiye' olmalıdır")
-		return
-	}
-	var haftalikGun, gunlukDakika, dakika *int64 // bakiyede haftalık/günlük, abonelikte dakika NULL kalır
-	if bakiyeMi {
-		if req.Dakika < 1 || req.Dakika > 100000 {
-			writeError(w, http.StatusBadRequest, "paket süresi 1 dakika ile 100.000 dakika arasında olmalıdır")
-			return
-		}
-		dakika = &req.Dakika
-	} else {
-		if req.HaftalikGun < 1 || req.HaftalikGun > 7 {
-			writeError(w, http.StatusBadRequest, "haftalık gün 1 ile 7 arasında olmalıdır")
-			return
-		}
-		if req.GunlukDakika < 1 || req.GunlukDakika > 1440 {
-			writeError(w, http.StatusBadRequest, "günlük süre 1 dakika ile 24 saat arasında olmalıdır")
-			return
-		}
-		haftalikGun, gunlukDakika = &req.HaftalikGun, &req.GunlukDakika
-	}
-	if req.AylikUcretKurus < 0 {
-		writeError(w, http.StatusBadRequest, "paket ücreti negatif olamaz")
+	haftalikGun, gunlukDakika, dakika, hata := req.dogrula()
+	if hata != "" {
+		writeError(w, http.StatusBadRequest, hata)
 		return
 	}
 

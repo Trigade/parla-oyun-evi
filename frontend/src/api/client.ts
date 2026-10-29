@@ -639,6 +639,46 @@ export const api = {
         aylik_ucret_kurus: aylikUcretKurus,
       }),
     }),
+  updatePackageDefinition: (
+    id: number,
+    ad: string,
+    grup: string,
+    haftalikGun: number,
+    gunlukDakika: number,
+    aylikUcretKurus: number,
+    tur: "abonelik" | "bakiye" = "abonelik",
+    dakika = 0
+  ) =>
+    request<PackageDefinition>(`/package-definitions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ad,
+        grup,
+        tur,
+        dakika,
+        haftalik_gun: haftalikGun,
+        gunluk_dakika: gunlukDakika,
+        aylik_ucret_kurus: aylikUcretKurus,
+      }),
+    }),
+  // Yönetici: satın alınmış paketi düzeltir (tutar/ödeme/satın alma zamanı değişmez).
+  updateCustomerPackage: (
+    customerId: number,
+    paketId: number,
+    body: {
+      tur: "abonelik" | "bakiye";
+      ad: string;
+      haftalik_gun: number;
+      gunluk_dakika: number;
+      toplam_dakika: number;
+      kalan_dakika: number;
+      gecerlilik_bitis: string; // "YYYY-MM-DD"
+    }
+  ) =>
+    request<CustomerPackage>(`/customers/${customerId}/packages/${paketId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   listCustomerPackages: (customerId: number) =>
     request<CustomerPackage[]>(`/customers/${customerId}/packages`),
   getCustomerPackageStatus: (customerId: number) =>

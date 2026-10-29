@@ -271,6 +271,8 @@ export async function createPricingPolicy(token: string, tiers: PricingTier[], y
 export interface CustomerPackage {
   id: number;
   tur: "abonelik" | "bakiye";
+  ad?: string;
+  gecerlilik_bitis?: string;
   toplam_dakika?: number;
   kalan_dakika?: number;
   kalan_deger_kurus?: number;
@@ -320,4 +322,17 @@ export async function deleteCustomer(token: string, id: number): Promise<void> {
 export async function findCustomerIdByTC(token: string, tc: string): Promise<number | null> {
   const res = await req<{ bulundu: boolean; musteri?: { id: number } }>(`/customers/by-tc/${tc}`, {}, token);
   return res.bulundu && res.musteri ? res.musteri.id : null;
+}
+
+/** Ham PATCH: durum kodunu da test edebilmek için Response döner (hata fırlatmaz). */
+export function patch(path: string, token: string, body: unknown): Promise<Response> {
+  return fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listPackageDefinitionsRaw(token: string): Promise<{ id: number; ad: string }[]> {
+  return req("/package-definitions", {}, token);
 }
