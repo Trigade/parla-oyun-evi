@@ -57,18 +57,19 @@ type oturumKaydi struct {
 	OdemeTipi      *string
 	Manuel, Erken  bool
 	PaketDusulenDk int64
+	GercekDakika   *int64 // yalnızca yönetici süre düzeltmesi yaptıysa dolu
 }
 
 const oturumRaporKolonlari = `s.giris_zamani, s.cikis_zamani, s.durum, s.toplam_dakika,
 	s.orijinal_tutar_kurus, s.indirim_kurus, s.tahsil_tutar_kurus, s.odeme_tipi,
-	s.manuel_kapatildi, s.on_odeme_yapildi_mi, s.paketten_dusulen_dakika`
+	s.manuel_kapatildi, s.on_odeme_yapildi_mi, s.paketten_dusulen_dakika, s.gercek_dakika`
 
 // scan, oturumRaporKolonlari sırasındaki satırı okur; onde verilen hedefler
 // bu kolonlardan önceki (müşteri adı gibi) alanlar içindir.
 func (o *oturumKaydi) scan(row interface{ Scan(...any) error }, onde ...any) error {
 	var cikis *time.Time
 	hedef := append(onde, &o.Giris, &cikis, &o.Durum, &o.Dakika, &o.Orijinal, &o.Indirim,
-		&o.Tahsil, &o.OdemeTipi, &o.Manuel, &o.Erken, &o.PaketDusulenDk)
+		&o.Tahsil, &o.OdemeTipi, &o.Manuel, &o.Erken, &o.PaketDusulenDk, &o.GercekDakika)
 	if err := row.Scan(hedef...); err != nil {
 		return err
 	}
@@ -106,6 +107,9 @@ func (o oturumKaydi) aciklama() string {
 		if o.Tahsil != nil && *o.Tahsil > 0 {
 			n = append(n, "Aşım tahsil edildi")
 		}
+	}
+	if o.GercekDakika != nil {
+		n = append(n, fmt.Sprintf("Süre düzeltildi (gerçek: %d dk)", *o.GercekDakika))
 	}
 	if o.Erken {
 		n = append(n, "Erken ödeme")

@@ -56,6 +56,16 @@ func isValidTCKimlikNo(tc string) bool {
 	return toplam%10 == int(tc[10]-'0')
 }
 
+// tcNullable: boş (boşluk dahil) TC kimlik no veritabanına NULL olarak yazılır;
+// TC isteğe bağlıdır, UNIQUE kısıtı yalnızca dolu değerleri kapsar.
+func tcNullable(tc string) *string {
+	tc = strings.TrimSpace(tc)
+	if tc == "" {
+		return nil
+	}
+	return &tc
+}
+
 // isValidTelefon: 10 ya da 11 haneli (başında 0 olsun olmasın) bir telefon
 // numarası olmalıdır. Ayraç/boşluk kabul edilmez; frontend gönderirken temizler.
 func isValidTelefon(tel string) bool {
@@ -95,7 +105,7 @@ func (a *API) LookupCustomerByTC(w http.ResponseWriter, r *http.Request) {
 	tc := chi.URLParam(r, "tc")
 	var customer models.Customer
 	err := a.DB.QueryRow(r.Context(),
-		`SELECT id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at FROM customers WHERE tc_kimlik_no = $1 AND deleted_at IS NULL`,
+		`SELECT id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at FROM customers WHERE tc_kimlik_no = $1 AND deleted_at IS NULL`,
 		tc,
 	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
 	if err != nil {
@@ -112,7 +122,7 @@ func (a *API) LookupCustomerByPhone(w http.ResponseWriter, r *http.Request) {
 	tel := chi.URLParam(r, "telefon")
 	var customer models.Customer
 	err := a.DB.QueryRow(r.Context(),
-		`SELECT id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at FROM customers WHERE telefon = $1 AND deleted_at IS NULL`,
+		`SELECT id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at FROM customers WHERE telefon = $1 AND deleted_at IS NULL`,
 		tel,
 	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
 	if err != nil {
@@ -141,11 +151,12 @@ func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.TCKimlikNo == "" || req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
-		writeError(w, http.StatusBadRequest, "TC kimlik no, ad, soyad ve telefon alanları zorunludur.")
+	if req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
+		writeError(w, http.StatusBadRequest, "Ad, soyad ve telefon alanları zorunludur.")
 		return
 	}
-	if !isValidTCKimlikNo(req.TCKimlikNo) {
+	tc := tcNullable(req.TCKimlikNo)
+	if tc != nil && !isValidTCKimlikNo(*tc) {
 		writeError(w, http.StatusBadRequest, "geçersiz TC kimlik no")
 		return
 	}
@@ -164,18 +175,20 @@ func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	var mevcutID int64
-	if err := a.DB.QueryRow(ctx,
-		`SELECT id FROM customers WHERE tc_kimlik_no = $1 AND deleted_at IS NULL`, req.TCKimlikNo,
-	).Scan(&mevcutID); err == nil {
-		writeError(w, http.StatusConflict, "Bu TC kimlik no ile kayıtlı bir müşteri zaten var.")
-		return
+	if tc != nil {
+		var mevcutID int64
+		if err := a.DB.QueryRow(ctx,
+			`SELECT id FROM customers WHERE tc_kimlik_no = $1 AND deleted_at IS NULL`, *tc,
+		).Scan(&mevcutID); err == nil {
+			writeError(w, http.StatusConflict, "Bu TC kimlik no ile kayıtlı bir müşteri zaten var.")
+			return
+		}
 	}
 
 	var telefonSahibiID int64
 	if err := a.DB.QueryRow(ctx,
-		`SELECT id FROM customers WHERE telefon = $1 AND tc_kimlik_no <> $2 AND deleted_at IS NULL`,
-		req.Telefon, req.TCKimlikNo,
+		`SELECT id FROM customers WHERE telefon = $1 AND ($2::text IS NULL OR tc_kimlik_no IS DISTINCT FROM $2::text) AND deleted_at IS NULL`,
+		req.Telefon, tc,
 	).Scan(&telefonSahibiID); err == nil {
 		writeError(w, http.StatusConflict, "bu telefon numarası başka bir müşteriye kayıtlı")
 		return
@@ -192,8 +205,8 @@ func (a *API) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad,
 			telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
-		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
-		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon,
+		 RETURNING id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
+		tc, req.Ad, req.Soyad, req.Telefon, veliTelefon,
 	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt, &yeniKayit)
 	if err != nil {
 		if pgUniqueViolation(err) {
@@ -216,11 +229,12 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.TCKimlikNo == "" || req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
-		writeError(w, http.StatusBadRequest, "TC kimlik no, ad, soyad ve telefon alanları zorunludur.")
+	if req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
+		writeError(w, http.StatusBadRequest, "Ad, soyad ve telefon alanları zorunludur.")
 		return
 	}
-	if !isValidTCKimlikNo(req.TCKimlikNo) {
+	tc := tcNullable(req.TCKimlikNo)
+	if tc != nil && !isValidTCKimlikNo(*tc) {
 		writeError(w, http.StatusBadRequest, "geçersiz TC kimlik no")
 		return
 	}
@@ -243,10 +257,12 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// TC'siz girişte telefon, TC'siz bir müşteriye aitse o müşteri kullanılır (aşağıda);
+	// TC'li bir müşteriye aitse çakışmadır (TC'li kaydın adı ezilmesin).
 	var telefonSahibiID int64
 	err := a.DB.QueryRow(ctx,
-		`SELECT id FROM customers WHERE telefon = $1 AND tc_kimlik_no <> $2 AND deleted_at IS NULL`,
-		req.Telefon, req.TCKimlikNo,
+		`SELECT id FROM customers WHERE telefon = $1 AND tc_kimlik_no IS DISTINCT FROM $2::text AND deleted_at IS NULL`,
+		req.Telefon, tc,
 	).Scan(&telefonSahibiID)
 	if err == nil {
 		writeError(w, http.StatusConflict, "bu telefon numarası başka bir müşteriye kayıtlı")
@@ -275,12 +291,25 @@ func (a *API) StartSession(w http.ResponseWriter, r *http.Request) {
 
 	var customer models.Customer
 	var yeniKayit bool
-	err = tx.QueryRow(ctx,
-		`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad, telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
-		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
-		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon,
-	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt, &yeniKayit)
+	bulundu := false
+	if tc == nil {
+		// TC'siz müşteri: telefon kimliktir; aktif kayıt varsa onu kullan (ON CONFLICT NULL TC'de çalışmaz).
+		err = tx.QueryRow(ctx,
+			`UPDATE customers SET ad = $2, soyad = $3, veli_telefon = $4
+			 WHERE telefon = $1 AND tc_kimlik_no IS NULL AND deleted_at IS NULL
+			 RETURNING id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at`,
+			req.Telefon, req.Ad, req.Soyad, veliTelefon,
+		).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
+		bulundu = err == nil
+	}
+	if !bulundu {
+		err = tx.QueryRow(ctx,
+			`INSERT INTO customers (tc_kimlik_no, ad, soyad, telefon, veli_telefon) VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (tc_kimlik_no) DO UPDATE SET ad = EXCLUDED.ad, soyad = EXCLUDED.soyad, telefon = EXCLUDED.telefon, veli_telefon = EXCLUDED.veli_telefon, deleted_at = NULL
+			 RETURNING id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at, (xmax = 0)`,
+			tc, req.Ad, req.Soyad, req.Telefon, veliTelefon,
+		).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt, &yeniKayit)
+	}
 	if err != nil {
 		if pgUniqueViolation(err) {
 			// Silinmiş kaydı geri getirirken telefon başka aktif müşteriye verilmiş olabilir.
@@ -356,11 +385,12 @@ func (a *API) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Gönderilen bilgiler okunamadı, lütfen sayfayı yenileyip tekrar deneyin.")
 		return
 	}
-	if req.TCKimlikNo == "" || req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
-		writeError(w, http.StatusBadRequest, "TC kimlik no, ad, soyad ve telefon alanları zorunludur.")
+	if req.Ad == "" || req.Soyad == "" || req.Telefon == "" {
+		writeError(w, http.StatusBadRequest, "Ad, soyad ve telefon alanları zorunludur.")
 		return
 	}
-	if !isValidTCKimlikNo(req.TCKimlikNo) {
+	tc := tcNullable(req.TCKimlikNo)
+	if tc != nil && !isValidTCKimlikNo(*tc) {
 		writeError(w, http.StatusBadRequest, "geçersiz TC kimlik no")
 		return
 	}
@@ -380,13 +410,15 @@ func (a *API) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var cakisanID int64
-	err = a.DB.QueryRow(ctx,
-		`SELECT id FROM customers WHERE tc_kimlik_no = $1 AND id <> $2 AND deleted_at IS NULL`,
-		req.TCKimlikNo, id,
-	).Scan(&cakisanID)
-	if err == nil {
-		writeError(w, http.StatusConflict, "bu TC kimlik no başka bir müşteriye kayıtlı")
-		return
+	if tc != nil {
+		err = a.DB.QueryRow(ctx,
+			`SELECT id FROM customers WHERE tc_kimlik_no = $1 AND id <> $2 AND deleted_at IS NULL`,
+			*tc, id,
+		).Scan(&cakisanID)
+		if err == nil {
+			writeError(w, http.StatusConflict, "bu TC kimlik no başka bir müşteriye kayıtlı")
+			return
+		}
 	}
 
 	err = a.DB.QueryRow(ctx,
@@ -406,15 +438,15 @@ func (a *API) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	islemDetay(r, map[string]any{"customer_id": id})
 	var eski models.Customer
 	eskiVar := a.DB.QueryRow(ctx,
-		`SELECT tc_kimlik_no, ad, soyad, telefon, veli_telefon FROM customers WHERE id = $1`, id,
+		`SELECT COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon FROM customers WHERE id = $1`, id,
 	).Scan(&eski.TCKimlikNo, &eski.Ad, &eski.Soyad, &eski.Telefon, &eski.VeliTelefon) == nil
 
 	var customer models.Customer
 	err = a.DB.QueryRow(ctx,
 		`UPDATE customers SET tc_kimlik_no = $1, ad = $2, soyad = $3, telefon = $4, veli_telefon = $5
 		 WHERE id = $6
-		 RETURNING id, tc_kimlik_no, ad, soyad, telefon, veli_telefon, created_at`,
-		req.TCKimlikNo, req.Ad, req.Soyad, req.Telefon, veliTelefon, id,
+		 RETURNING id, COALESCE(tc_kimlik_no, ''), ad, soyad, telefon, veli_telefon, created_at`,
+		tc, req.Ad, req.Soyad, req.Telefon, veliTelefon, id,
 	).Scan(&customer.ID, &customer.TCKimlikNo, &customer.Ad, &customer.Soyad, &customer.Telefon, &customer.VeliTelefon, &customer.CreatedAt)
 	if err != nil {
 		if pgUniqueViolation(err) {
@@ -505,7 +537,7 @@ func (a *API) ListCustomers(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.DB.Query(r.Context(), `
 		SELECT
-			c.id, c.tc_kimlik_no, c.ad, c.soyad, c.telefon, c.veli_telefon,
+			c.id, COALESCE(c.tc_kimlik_no, ''), c.ad, c.soyad, c.telefon, c.veli_telefon,
 			COUNT(s.id) FILTER (WHERE s.durum = 'kapali'),
 			COALESCE(SUM(s.tahsil_tutar_kurus) FILTER (WHERE s.durum = 'kapali'), 0),
 			MAX(s.cikis_zamani),

@@ -3,6 +3,7 @@ import {
   api,
   abonelikOzetiMetni,
   formatSureMetni,
+  paketAsimUcretiHesapla,
   tierUcretiHesapla,
   type CustomerListItem,
   type OpenSession,
@@ -70,6 +71,8 @@ export default function KasaEkrani() {
   const [indirimDeger, setIndirimDeger] = useState("");
   const { isAdmin } = useAuth();
   const [ozelTutar, setOzelTutar] = useState("");
+  // Yönetici süre düzeltmesi: null = kapalı (gerçek süre), dolu = Saat/Dakika girdileri.
+  const [sureDuzelt, setSureDuzelt] = useState<{ saat: string; dakika: string } | null>(null);
 
   const [paketDurumu, setPaketDurumu] = useState<PackageStatus | null>(null);
 
@@ -235,7 +238,7 @@ export default function KasaEkrani() {
     setTelefonKontrolEdiliyor(true);
     try {
       const sonuc = await api.lookupCustomerByPhone(tel);
-      if (sonuc.bulundu && sonuc.musteri && sonuc.musteri.tc_kimlik_no !== tcKimlikNo.trim()) {
+      if (sonuc.bulundu && sonuc.musteri && (tcKimlikNo.trim() === "" || sonuc.musteri.tc_kimlik_no !== tcKimlikNo.trim())) {
         setTelefonKayitliUyari(
           `Bu telefon numarası ${sonuc.musteri.ad} ${sonuc.musteri.soyad} adına kayıtlı.`
         );
@@ -265,6 +268,7 @@ export default function KasaEkrani() {
     setIndirimTipi("tutar");
     setIndirimDeger("");
     setOzelTutar("");
+    setSureDuzelt(null);
     setPaketDurumu(null);
     setAsimOnayAcik(false);
   }
@@ -273,6 +277,7 @@ export default function KasaEkrani() {
   // bugün ne kadar hakkı kaldı) kasiyere gösterilmek üzere alınır.
   useEffect(() => {
     const session = sessions.find((s) => s.id === seciliSessionId);
+    setSureDuzelt(null);
     if (!session) {
       setPaketDurumu(null);
       return;
@@ -309,7 +314,8 @@ export default function KasaEkrani() {
         paketModu === "ucretsiz" ? false : yuvarla,
         paketModu === "ucretsiz" ? 0 : indirimKurus,
         paketModu,
-        paketModu === "ucretsiz" ? undefined : ozelTutarKurus
+        paketModu === "ucretsiz" ? undefined : ozelTutarKurus,
+        duzeltilmisDakika
       );
       if (sonuc.silindi) {
         setBilgi("Oturum 1 dakikadan kısa sürdüğü için ücretsiz kapatıldı (kayıt silindi); paketten düşülmedi ve ücret alınmadı.");
@@ -382,6 +388,10 @@ export default function KasaEkrani() {
   const canliDakika = seciliSession
     ? Math.max(0, Math.floor((simdi - new Date(seciliSession.giris_zamani).getTime()) / 60000))
     : 0;
+  // Yönetici süre düzeltmesi geçerliyse (>= 1 dk) tüm fiyat/paket hesapları bu süreyle yapılır.
+  const sureDuzeltSayi = sureDuzelt ? (Number(sureDuzelt.saat) || 0) * 60 + (Number(sureDuzelt.dakika) || 0) : 0;
+  const duzeltilmisDakika = isAdmin && sureDuzelt && sureDuzeltSayi >= 1 ? Math.floor(sureDuzeltSayi) : undefined;
+  const efektifDakika = duzeltilmisDakika ?? canliDakika;
   const seciliSuresiDoldu =
     seciliSession?.sure_secimi_dakika != null && canliDakika >= seciliSession.sure_secimi_dakika;
 
@@ -413,13 +423,15 @@ export default function KasaEkrani() {
   // Paketli müşteride günlük hakkı aşan süre ve bunun ücreti; kararı kasiyer verir.
   const paketVar = paketDurumu?.var === true;
   const paketKalanGunlukDakika = paketDurumu?.kalan_gunluk_dakika ?? 0;
-  const paketAsanDakika = paketVar ? Math.max(0, canliDakika - paketKalanGunlukDakika) : 0;
+  const paketAsanDakika = paketVar ? Math.max(0, efektifDakika - paketKalanGunlukDakika) : 0;
   const bakiyePaketi = paketDurumu?.tur === "bakiye";
-  const paketAsanTutar = paketAsanDakika > 0 ? tierUcretiHesapla(paketAsanDakika, pricingPolicy) : null;
+  const paketAsanTutar = paketAsanDakika > 0 ? paketAsimUcretiHesapla(paketAsanDakika, pricingPolicy) : null;
   // Abonelikte ücretsiz düşmeden önce kasiyere gösterilen uyarı: günlük süre aşımı ya da haftalık gün hakkı dolması.
-  const abonelikUyarisi = paketVar && !bakiyePaketi && (paketAsanDakika > 0 || paketDurumu?.gun_hakki_doldu_mu === true);
+  const asimToleransIcinde = paketAsanDakika > 0 && paketAsanTutar === 0;
+  const abonelikUyarisi =
+    paketVar && !bakiyePaketi && ((paketAsanDakika > 0 && !asimToleransIcinde) || paketDurumu?.gun_hakki_doldu_mu === true);
 
-  const tahminiTutarHam = tierUcretiHesapla(canliDakika, pricingPolicy);
+  const tahminiTutarHam = tierUcretiHesapla(efektifDakika, pricingPolicy);
   const yuvarlanmisTutar = tahminiTutarHam != null && yuvarla ? yuvarlaKurus(tahminiTutarHam) : tahminiTutarHam;
 
   const indirimDegerSayi = Number(indirimDeger.replace(",", "."));
@@ -572,7 +584,7 @@ export default function KasaEkrani() {
                                   <span className="badge badge--nakit" style={{ marginLeft: 8 }}>İçeride</span>
                                 )}
                               </td>
-                              <td className="muted">{m.tc_kimlik_no}</td>
+                              <td className="muted">{m.tc_kimlik_no || "—"}</td>
                               <td className="muted">{m.telefon || "—"}</td>
                               <td style={{ textAlign: "right" }}>
                                 {m.acik_oturum_var ? (
@@ -642,7 +654,7 @@ export default function KasaEkrani() {
             {asama === "bulundu" && (
               <div>
                 <div className="alert alert--success">
-                  Kayıt bulundu: <strong>{ad} {soyad}</strong> ({tcKimlikNo})
+                  Kayıt bulundu: <strong>{ad} {soyad}</strong> ({tcKimlikNo || "—"})
                   {telefon && <> — Tel: {telefon}</>}
                 </div>
                 <div className="field-row">
@@ -669,7 +681,7 @@ export default function KasaEkrani() {
                     <input placeholder="Soyad" value={soyad} onChange={(e) => setSoyad(e.target.value)} />
                   </div>
                   <div className="field">
-                    <label>TC Kimlik No</label>
+                    <label>TC Kimlik No (isteğe bağlı)</label>
                     <input
                       placeholder="12345678901"
                       value={tcKimlikNo}
@@ -731,7 +743,7 @@ export default function KasaEkrani() {
                     disabled={
                       !ad.trim() ||
                       !soyad.trim() ||
-                      !tcKimlikNoGecerliMi(tcKimlikNo) ||
+                      (tcKimlikNo !== "" && !tcKimlikNoGecerliMi(tcKimlikNo)) ||
                       !telefonGecerliMi(telefon) ||
                       (veliTelefon.length > 0 && !telefonGecerliMi(veliTelefon))
                     }
@@ -782,7 +794,7 @@ export default function KasaEkrani() {
               <div className="stat-row" style={{ marginTop: 16 }}>
                 <div className="stat-card">
                   <div className="stat-card__label">Geçen Süre</div>
-                  <div className="stat-card__value">{formatSureMetni(canliDakika)}</div>
+                  <div className="stat-card__value">{formatSureMetni(efektifDakika)}</div>
                 </div>
                 {paketVar && (
                   <div className="stat-card">
@@ -844,21 +856,26 @@ export default function KasaEkrani() {
                       ⚠ {bakiyePaketi ? "Kalan bakiyeyi" : "Günlük hakkı"} {formatSureMetni(paketAsanDakika)} aşıyor
                       {paketAsanTutar != null && paketAsanTutar > 0
                         ? ` · aşan süre ücreti ${formatKurus(paketAsanTutar)}`
-                        : ""}
-                      .{bakiyePaketi && " Ücretsiz düşülemez; aşan kısmı tahsil edin."}
+                        : paketAsanTutar === 0 ? " · tolerans içinde, aşan süre ücretsiz" : ""}
+                      .{bakiyePaketi && !asimToleransIcinde && " Ücretsiz düşülemez; aşan kısmı tahsil edin."}
                     </div>
                   )}
                   <div className="field-row" style={{ marginTop: 10 }}>
                     <button
                       className="secondary"
-                      disabled={kapatiliyor || (bakiyePaketi && paketAsanDakika > 0)}
+                      disabled={kapatiliyor || (bakiyePaketi && paketAsanDakika > 0 && !asimToleransIcinde)}
                       onClick={() =>
-                        abonelikUyarisi ? setAsimOnayAcik(true) : odendiIsaretle(seciliSession.id, "paket", "ucretsiz")
+                        // Bakiye aşımı tolerans içindeyse "asim" modu 0 TL ile kapatır (backend ücretsiz modu bakiye aşımında reddeder).
+                        bakiyePaketi && asimToleransIcinde
+                          ? odendiIsaretle(seciliSession.id, "nakit", "asim")
+                          : abonelikUyarisi
+                            ? setAsimOnayAcik(true)
+                            : odendiIsaretle(seciliSession.id, "paket", "ucretsiz")
                       }
                     >
                       Paketten Düş (Ücretsiz)
                     </button>
-                    {paketAsanDakika > 0 && (
+                    {paketAsanDakika > 0 && !asimToleransIcinde && (
                       <>
                         <button
                           className="ghost"
@@ -921,6 +938,48 @@ export default function KasaEkrani() {
                       %
                     </button>
                   </div>
+                </div>
+              )}
+
+              {isAdmin && (
+                <div className="field-row" style={{ marginTop: 8, alignItems: "center" }}>
+                  {sureDuzelt ? (
+                    <>
+                      <div className="field" style={{ maxWidth: 90 }}>
+                        <label>Saat</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={sureDuzelt.saat}
+                          onChange={(e) => setSureDuzelt({ ...sureDuzelt, saat: e.target.value })}
+                        />
+                      </div>
+                      <div className="field" style={{ maxWidth: 90 }}>
+                        <label>Dakika</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={sureDuzelt.dakika}
+                          onChange={(e) => setSureDuzelt({ ...sureDuzelt, dakika: e.target.value })}
+                        />
+                      </div>
+                      <button className="ghost" onClick={() => setSureDuzelt(null)}>Gerçek süreye dön</button>
+                    </>
+                  ) : (
+                    <button
+                      className="ghost"
+                      onClick={() =>
+                        setSureDuzelt({ saat: String(Math.floor(canliDakika / 60)), dakika: String(canliDakika % 60) })
+                      }
+                    >
+                      Süreyi Düzenle
+                    </button>
+                  )}
+                  {duzeltilmisDakika !== undefined && (
+                    <span className="muted" style={{ fontSize: 14 }}>
+                      Süre düzeltildi: {formatSureMetni(duzeltilmisDakika)} (gerçek: {formatSureMetni(canliDakika)})
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -1072,12 +1131,13 @@ export default function KasaEkrani() {
               <>
                 <p style={{ marginBottom: 8 }}>
                   Günlük hak: {formatSureMetni(paketDurumu.gunluk_dakika ?? 0)} · Bugün kalan:{" "}
-                  {formatSureMetni(paketKalanGunlukDakika)} · İçeride geçen: {formatSureMetni(canliDakika)} →{" "}
+                  {formatSureMetni(paketKalanGunlukDakika)} · İçeride geçen: {formatSureMetni(efektifDakika)} →{" "}
                   <strong>{formatSureMetni(paketAsanDakika)} fazla.</strong>
                 </p>
                 {paketAsanTutar != null && (
                   <p style={{ marginBottom: 8 }}>
-                    Aşan {formatSureMetni(paketAsanDakika)}'in ücreti: <strong>{formatKurus(paketAsanTutar)}</strong>
+                    Aşan {formatSureMetni(paketAsanDakika)}'in ücreti:{" "}
+                    <strong>{paketAsanTutar > 0 ? formatKurus(paketAsanTutar) : "tolerans içinde, ücretsiz"}</strong>
                   </p>
                 )}
               </>

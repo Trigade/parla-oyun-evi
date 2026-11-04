@@ -287,7 +287,7 @@ export default function SatinAlma() {
                   <td>
                     {c.ad} {c.soyad}
                   </td>
-                  <td>{c.tc_kimlik_no}</td>
+                  <td>{c.tc_kimlik_no || "—"}</td>
                   <td>{c.telefon || "—"}</td>
                   <td className="muted">{c.aktif_paket ?? "Paketi yok"}</td>
                 </tr>
@@ -301,7 +301,7 @@ export default function SatinAlma() {
             <strong>
               {seciliMusteri.ad} {seciliMusteri.soyad}
             </strong>
-            <span className="muted"> · TC: {seciliMusteri.tc_kimlik_no} · Tel: {seciliMusteri.telefon || "—"}</span>
+            <span className="muted"> · TC: {seciliMusteri.tc_kimlik_no || "—"} · Tel: {seciliMusteri.telefon || "—"}</span>
             <div style={{ marginTop: 4 }}>
               {musteriPaketleriYukleniyor ? (
                 <span className="muted">Paket bilgisi yükleniyor...</span>

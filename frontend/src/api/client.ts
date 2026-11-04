@@ -337,6 +337,13 @@ export function tierUcretiHesapla(dakika: number, policy: PricingPolicy | null):
   return tier ? tamTurSayisi * sonTier.tutar_kurus + tier.tutar_kurus : null;
 }
 
+// Paket aşımı (paketi aşan dakika) tolerans içindeyse ücretsiz (0), aksi halde
+// aşımın bloğunun ücreti. Backend'deki asimUcretlenecekDakika ile aynı kural.
+export function paketAsimUcretiHesapla(asim: number, policy: PricingPolicy | null): number | null {
+  if (policy && asim <= policy.yuvarlama_tolerans_dakika) return 0;
+  return tierUcretiHesapla(asim, policy);
+}
+
 // Dakikayı "1 saat 30 dakika" gibi okunabilir Türkçe metne çevirir.
 export function formatSureMetni(dakika: number): string {
   const saat = Math.floor(dakika / 60);
@@ -494,7 +501,8 @@ export const api = {
     yuvarla: boolean,
     indirimKurus = 0,
     paketModu: "" | "ucretsiz" | "asim" = "",
-    ozelTutarKurus?: number // yalnızca yönetici: tek seferlik elle tutar
+    ozelTutarKurus?: number, // yalnızca yönetici: tek seferlik elle tutar
+    sureDuzeltmeDakika?: number // yalnızca yönetici: hesaplanan süre yerine bu süre esas alınır
   ) =>
     request<{ silindi?: boolean }>(`/sessions/${id}/close`, {
       method: "POST",
@@ -504,6 +512,7 @@ export const api = {
         indirim_kurus: indirimKurus,
         paket_modu: paketModu,
         ...(ozelTutarKurus !== undefined && { ozel_tutar_kurus: ozelTutarKurus }),
+        ...(sureDuzeltmeDakika !== undefined && { sure_duzeltme_dakika: sureDuzeltmeDakika }),
       }),
     }),
   payEarlySession: (
