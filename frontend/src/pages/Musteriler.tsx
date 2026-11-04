@@ -112,7 +112,7 @@ export default function Musteriler() {
     return (
       yeniAd.trim() !== "" &&
       yeniSoyad.trim() !== "" &&
-      tcKimlikNoGecerliMi(yeniTc) &&
+      (yeniTc === "" || tcKimlikNoGecerliMi(yeniTc)) &&
       telefonGecerliMi(yeniTelefon) &&
       (yeniVeliTelefon === "" || telefonGecerliMi(yeniVeliTelefon))
     );
@@ -371,7 +371,7 @@ export default function Musteriler() {
                 />
               </div>
               <div className="field">
-                <label htmlFor="yeni-tc">TC Kimlik No</label>
+                <label htmlFor="yeni-tc">TC Kimlik No (isteğe bağlı)</label>
                 <input
                   id="yeni-tc"
                   placeholder="12345678901"
@@ -470,7 +470,7 @@ export default function Musteriler() {
                       <span className="badge badge--nakit" style={{ marginLeft: 8 }}>İçeride</span>
                     )}
                   </td>
-                  <td>{c.tc_kimlik_no}</td>
+                  <td>{c.tc_kimlik_no || "—"}</td>
                   <td>{c.telefon || "—"}</td>
                   <td>{c.veli_telefon || "—"}</td>
                   <td>{c.toplam_oturum}</td>
@@ -492,7 +492,7 @@ export default function Musteriler() {
               <div>
                 <h2 style={{ marginBottom: 4 }}>{seciliMusteri.ad} {seciliMusteri.soyad}</h2>
                 <p className="muted">
-                  TC: {seciliMusteri.tc_kimlik_no} · Tel: {seciliMusteri.telefon || "—"}
+                  TC: {seciliMusteri.tc_kimlik_no || "—"} · Tel: {seciliMusteri.telefon || "—"}
                   {seciliMusteri.veli_telefon && <> · Veli Tel: {seciliMusteri.veli_telefon}</>}
                 </p>
                 <p className="muted">
@@ -548,7 +548,7 @@ export default function Musteriler() {
                 </div>
                 <div className="field-row" style={{ marginTop: 12 }}>
                   <div className="field">
-                    <label>TC Kimlik No</label>
+                    <label>TC Kimlik No (isteğe bağlı)</label>
                     <input
                       value={duzenleTc}
                       inputMode="numeric"
@@ -598,7 +598,7 @@ export default function Musteriler() {
                       kaydediliyor ||
                       !duzenleAd.trim() ||
                       !duzenleSoyad.trim() ||
-                      !tcKimlikNoGecerliMi(duzenleTc) ||
+                      (duzenleTc !== "" && !tcKimlikNoGecerliMi(duzenleTc)) ||
                       !telefonGecerliMi(duzenleTelefon) ||
                       (duzenleVeliTelefon.length > 0 && !telefonGecerliMi(duzenleVeliTelefon))
                     }

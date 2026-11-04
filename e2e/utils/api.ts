@@ -211,6 +211,19 @@ export async function startSession(
   );
 }
 
+/** POST /customers — durum kodunu da döner (TC'siz kayıt / doğrulama testleri için). */
+export async function createCustomerRaw(
+  token: string,
+  data: { tc_kimlik_no?: string; ad: string; soyad: string; telefon: string }
+): Promise<{ status: number; body: unknown }> {
+  const res = await fetch(`${API_BASE}/customers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(data),
+  });
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
+
 export interface CustomerListItem {
   id: number;
   tc_kimlik_no: string;

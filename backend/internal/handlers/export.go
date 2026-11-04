@@ -106,7 +106,7 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 
 	var tcKimlikNo, ad, soyad, telefon string
 	if err := a.DB.QueryRow(r.Context(),
-		`SELECT tc_kimlik_no, ad, soyad, telefon FROM customers WHERE id = $1`, id,
+		`SELECT COALESCE(tc_kimlik_no, ''), ad, soyad, telefon FROM customers WHERE id = $1`, id,
 	).Scan(&tcKimlikNo, &ad, &soyad, &telefon); err != nil {
 		writeError(w, http.StatusNotFound, "müşteri bulunamadı")
 		return
@@ -229,6 +229,9 @@ func (a *API) ExportCustomerPDF(w http.ResponseWriter, r *http.Request) {
 
 // maskeTC kimlik numarasının ilk 3 ve son 2 hanesini gösterir (kişisel veri).
 func maskeTC(tc string) string {
+	if tc == "" {
+		return "-"
+	}
 	r := []rune(tc)
 	if len(r) < 6 {
 		return tc

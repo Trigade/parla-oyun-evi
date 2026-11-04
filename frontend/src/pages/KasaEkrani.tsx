@@ -235,7 +235,7 @@ export default function KasaEkrani() {
     setTelefonKontrolEdiliyor(true);
     try {
       const sonuc = await api.lookupCustomerByPhone(tel);
-      if (sonuc.bulundu && sonuc.musteri && sonuc.musteri.tc_kimlik_no !== tcKimlikNo.trim()) {
+      if (sonuc.bulundu && sonuc.musteri && (tcKimlikNo.trim() === "" || sonuc.musteri.tc_kimlik_no !== tcKimlikNo.trim())) {
         setTelefonKayitliUyari(
           `Bu telefon numarası ${sonuc.musteri.ad} ${sonuc.musteri.soyad} adına kayıtlı.`
         );
@@ -572,7 +572,7 @@ export default function KasaEkrani() {
                                   <span className="badge badge--nakit" style={{ marginLeft: 8 }}>İçeride</span>
                                 )}
                               </td>
-                              <td className="muted">{m.tc_kimlik_no}</td>
+                              <td className="muted">{m.tc_kimlik_no || "—"}</td>
                               <td className="muted">{m.telefon || "—"}</td>
                               <td style={{ textAlign: "right" }}>
                                 {m.acik_oturum_var ? (
@@ -642,7 +642,7 @@ export default function KasaEkrani() {
             {asama === "bulundu" && (
               <div>
                 <div className="alert alert--success">
-                  Kayıt bulundu: <strong>{ad} {soyad}</strong> ({tcKimlikNo})
+                  Kayıt bulundu: <strong>{ad} {soyad}</strong> ({tcKimlikNo || "—"})
                   {telefon && <> — Tel: {telefon}</>}
                 </div>
                 <div className="field-row">
@@ -669,7 +669,7 @@ export default function KasaEkrani() {
                     <input placeholder="Soyad" value={soyad} onChange={(e) => setSoyad(e.target.value)} />
                   </div>
                   <div className="field">
-                    <label>TC Kimlik No</label>
+                    <label>TC Kimlik No (isteğe bağlı)</label>
                     <input
                       placeholder="12345678901"
                       value={tcKimlikNo}
@@ -731,7 +731,7 @@ export default function KasaEkrani() {
                     disabled={
                       !ad.trim() ||
                       !soyad.trim() ||
-                      !tcKimlikNoGecerliMi(tcKimlikNo) ||
+                      (tcKimlikNo !== "" && !tcKimlikNoGecerliMi(tcKimlikNo)) ||
                       !telefonGecerliMi(telefon) ||
                       (veliTelefon.length > 0 && !telefonGecerliMi(veliTelefon))
                     }
