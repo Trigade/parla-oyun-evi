@@ -76,6 +76,36 @@ type closeSessionRequest struct {
 	// OzelTutarKurus yalnızca yöneticiler içindir: dolu ise tahsil edilecek tutar
 	// budur; yuvarlama ve indirim yok sayılır (tek seferlik, kalıcı fiyat değil).
 	OzelTutarKurus *int64 `json:"ozel_tutar_kurus"`
+	// SureDuzeltmeDakika yalnızca yöneticiler içindir: dolu ise hesaplanan süre
+	// yerine bu süre (paket, aşım, fiyat, toplam_dakika) esas alınır.
+	SureDuzeltmeDakika *int64 `json:"sure_duzeltme_dakika"`
+}
+
+// sureDuzeltmeYetkisi, süre düzeltmesi istenmişse çağıranın yönetici olduğunu
+// ve değerin makul aralıkta olduğunu doğrular. Backend'de zorunludur.
+func sureDuzeltmeYetkisi(w http.ResponseWriter, r *http.Request, sure *int64) bool {
+	if sure == nil {
+		return true
+	}
+	if claims, found := auth.FromContext(r.Context()); !found || !claims.IsAdmin {
+		writeError(w, http.StatusForbidden, "Süre düzeltme yalnızca yöneticiler tarafından yapılabilir.")
+		return false
+	}
+	if *sure < 1 || *sure > 2*24*60 {
+		writeError(w, http.StatusBadRequest, "Düzeltilen süre 1 dakika ile 48 saat arasında olmalıdır.")
+		return false
+	}
+	return true
+}
+
+// sureDuzeltmeAuditYaz süre düzeltmesini denetim izine düşer.
+func sureDuzeltmeAuditYaz(ctx context.Context, tx pgx.Tx, userID, sessionID, gercek, duzeltilmis int64) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO audit_log (user_id, action, target_table, target_id, detail)
+		 VALUES ($1, 'sure_duzeltme', 'sessions', $2, $3)`,
+		userID, sessionID, map[string]any{"gercek_dakika": gercek, "duzeltilmis_dakika": duzeltilmis},
+	)
+	return err
 }
 
 // ozelTutarYetkisi, istekte özel tutar varsa çağıranın yönetici olduğunu ve
@@ -164,6 +194,9 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !sureDuzeltmeYetkisi(w, r, req.SureDuzeltmeDakika) {
+		return
+	}
 
 	ctx := r.Context()
 	tx, err := a.DB.Begin(ctx)
@@ -199,6 +232,14 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 	toplamDakika := int64(cikisZamani.Sub(girisZamani).Minutes())
 	if toplamDakika < 0 {
 		toplamDakika = 0
+	}
+	// Yönetici süre düzeltmesi: gerçek süre yalnızca düzeltme verildiğinde saklanır.
+	var gercekDakika *int64
+	if req.SureDuzeltmeDakika != nil {
+		g := toplamDakika
+		gercekDakika = &g
+		toplamDakika = *req.SureDuzeltmeDakika
+		islemDetay(r, map[string]any{"gercek_dakika": g, "duzeltilmis_dakika": toplamDakika})
 	}
 
 	if toplamDakika == 0 {
@@ -291,6 +332,16 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 				"kalan_gunluk_dakika_once": durum.KalanGunlukDakika,
 			})
 		}
+		// Paket aşımı tolerans içindeyse ücretsizdir; tolerans üstündeyse
+		// tierUcretiniHesapla zaten toleransı düşerek ücretlendirir.
+		if req.PaketModu == "asim" && ucretlendirilecekDakika > 0 {
+			_, _, tolerans, err := aktifPolitikaVersiyonu(ctx, tx)
+			if err != nil {
+				writeServerError(w, http.StatusInternalServerError, "Aktif bir fiyat politikası tanımlı değil, lütfen yöneticinize bildirin.", err)
+				return
+			}
+			ucretlendirilecekDakika = asimUcretlenecekDakika(ucretlendirilecekDakika, tolerans)
+		}
 		islemDetay(r, map[string]any{"paketten_dusulen_dakika": paketDusulen, "ucretlendirilen_dakika": ucretlendirilecekDakika})
 	}
 
@@ -332,12 +383,19 @@ func (a *API) CloseSession(w http.ResponseWriter, r *http.Request) {
 			odeme_tipi = $7,
 			indirim_kurus = $8,
 			paketten_dusulen_dakika = $9,
-			customer_package_id = $10
-		WHERE id = $11`,
-		cikisZamani, pricingTierVersionID, pricingTierID, toplamDakika, orijinalTutar, tahsilTutar, req.OdemeTipi, indirimKurus, paketDusulen, paketID, id,
+			customer_package_id = $10,
+			gercek_dakika = $11
+		WHERE id = $12`,
+		cikisZamani, pricingTierVersionID, pricingTierID, toplamDakika, orijinalTutar, tahsilTutar, req.OdemeTipi, indirimKurus, paketDusulen, paketID, gercekDakika, id,
 	); err != nil {
 		writeServerError(w, http.StatusInternalServerError, "oturum kapatılamadı", err)
 		return
+	}
+	if gercekDakika != nil {
+		if err := sureDuzeltmeAuditYaz(ctx, tx, userID, id, *gercekDakika, toplamDakika); err != nil {
+			writeServerError(w, http.StatusInternalServerError, "audit log yazılamadı", err)
+			return
+		}
 	}
 	if req.OzelTutarKurus != nil {
 		if err := ozelTutarAuditYaz(ctx, tx, userID, "sessions", id, orijinalTutar, *req.OzelTutarKurus); err != nil {

@@ -27,3 +27,16 @@ func TestTierUcretiSaf(t *testing.T) {
 		}
 	}
 }
+
+func TestAsimUcretlenecekDakika(t *testing.T) {
+	cases := []struct {
+		asim     int64
+		tolerans int
+		want     int64
+	}{{0, 5, 0}, {3, 5, 0}, {5, 5, 0}, {6, 5, 6}, {25, 5, 25}, {1, 0, 1}}
+	for _, c := range cases {
+		if got := asimUcretlenecekDakika(c.asim, c.tolerans); got != c.want {
+			t.Errorf("asim=%d tolerans=%d: got %d, want %d", c.asim, c.tolerans, got, c.want)
+		}
+	}
+}

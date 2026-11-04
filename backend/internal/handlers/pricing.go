@@ -228,6 +228,16 @@ func tierUcretiSaf(tiers []tierRow, tolerans int, dakika int64) (tierID int64, t
 	return 0, 0, fmt.Errorf("süreye (%d dk) uygun bir fiyat bloğu bulunamadı", dakika)
 }
 
+// asimUcretlenecekDakika, paket aşımı (paketi aşan dakika) tolerans içindeyse
+// ücretsiz (0), aksi halde aşımın tamamını döner (toleransı tierUcretiSaf düşer).
+// Frontend'deki paketAsimUcretlenecekDakika (api/client.ts) ile aynı olmalıdır.
+func asimUcretlenecekDakika(asim int64, tolerans int) int64 {
+	if asim <= int64(tolerans) {
+		return 0
+	}
+	return asim
+}
+
 // tierUcretiniHesapla, verilen dakika süresinin düştüğü fiyat bloğunu aktif
 // politikadan bulur ve ücreti döner. Oturum kapatma akışlarında (sessions.go)
 // bir işlem (tx) içinden çağrılır ki hesaplama ile oturum güncellemesi aynı
